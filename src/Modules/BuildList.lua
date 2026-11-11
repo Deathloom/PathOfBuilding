@@ -9,6 +9,7 @@ local t_insert = table.insert
 
 local buildListHelpers = require("Modules.BuildListHelpers")
 local buildSortDropList = buildListHelpers.buildSortDropList
+local buildSync = require("Modules.BuildSync") -- fork: Push/Pull builds to GitHub
 
 local listMode = new("ControlHost"):ControlHost()
 
@@ -45,7 +46,7 @@ function listMode:Init(selBuildName, subPath)
 	self.subPath = subPath or ""
 	self.list = { }
 
-	self.controls.new = new("ButtonControl"):ButtonControl({"TOP",self.anchor,"TOP"}, {-259, 0, 60, 20}, "New", function()
+	self.controls.new = new("ButtonControl"):ButtonControl({"TOP",self.anchor,"TOP"}, {-356, 0, 60, 20}, "New", function()
 		main:SetMode("BUILD", false, "Unnamed build")
 	end)
 	self.controls.newFolder = new("ButtonControl"):ButtonControl({"LEFT",self.controls.new,"RIGHT"}, {8, 0, 90, 20}, "New Folder", function()
@@ -72,6 +73,35 @@ function listMode:Init(selBuildName, subPath)
 		self:SortList()
 	end)
 	self.controls.sort:SelByValue(main.buildSortMode, "sortMode")
+	-- fork: Push/Pull builds to the shared GitHub repo (Modules/BuildSync.lua)
+	local function refreshAfterSync()
+		self:BuildList()
+	end
+	self.controls.syncPull = new("ButtonControl"):ButtonControl({"LEFT",self.controls.sort,"RIGHT"}, {8, 0, 55, 20}, function()
+		return buildSync.busy and "..." or "Pull"
+	end, function()
+		buildSync:Pull(refreshAfterSync)
+	end)
+	self.controls.syncPull.enabled = function() return not buildSync.busy end
+	self.controls.syncPull.tooltipFunc = function(tooltip)
+		tooltip:Clear()
+		tooltip:AddLine(16, buildSync.busy and ("^7"..(buildSync.status or "Syncing...")) or "^7Pull builds: download everyone's builds from the shared GitHub repo.")
+	end
+	self.controls.syncPush = new("ButtonControl"):ButtonControl({"LEFT",self.controls.syncPull,"RIGHT"}, {8, 0, 55, 20}, function()
+		return buildSync.busy and "..." or "Push"
+	end, function()
+		buildSync:Push(refreshAfterSync)
+	end)
+	self.controls.syncPush.enabled = function() return not buildSync.busy end
+	self.controls.syncPush.tooltipFunc = function(tooltip)
+		tooltip:Clear()
+		tooltip:AddLine(16, buildSync.busy and ("^7"..(buildSync.status or "Syncing...")) or "^7Push builds: upload changes in your own player folder to the shared GitHub repo.")
+	end
+	self.controls.syncSettings = new("ButtonControl"):ButtonControl({"LEFT",self.controls.syncPush,"RIGHT"}, {8, 0, 60, 20}, "Sync...", function()
+		buildSync:OpenSettingsPopup()
+	end)
+	self.controls.syncSettings.enabled = function() return not buildSync.busy end
+	self.controls.syncSettings.tooltipText = "GitHub repo, your player folder and access token for Push/Pull."
 	self.controls.buildList = new("BuildListControl"):BuildListControl({"TOP",self.anchor,"TOP"}, {0, 75, 900, 0}, self)
 	self.controls.buildList.height = function()
 		return main.screenH - 80

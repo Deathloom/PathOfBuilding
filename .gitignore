@@ -45,3 +45,6 @@ runtime/SimpleGraphic/Screenshots
 
 .emmyrc.json
 .luarc.json
+
+# fork: Push/Pull builds settings (no secrets; token lives in Windows Credential Manager)
+BuildSync.json
