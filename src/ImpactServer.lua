@@ -17,9 +17,18 @@
 --   {"id":2,"cmd":"load","path":"D:/.../MyBuild.xml"}      (or "xml":"<PathOfBuilding>...")
 --   {"id":3,"cmd":"impact","item":"Item Class: Rings\nRarity: Rare\n..."}
 --   {"id":4,"cmd":"info"}
---   {"id":5,"cmd":"quit"}
+--   {"id":5,"cmd":"equipped","items":[...],"character":{...}}   (live gear, see below)
+--   {"id":6,"cmd":"clearEquipped"}
+--   {"id":7,"cmd":"quit"}
 --
 -- Replies: {"id":n,"ok":true,...} or {"id":n,"ok":false,"error":"..."}
+--
+-- Live gear: "equipped" takes the "items" array of the character's equipped
+-- items (the JSON the public Characters tab returns) and puts them in a hidden
+-- item set. After that, "impact" answers twice: vs the build's own gear
+-- ("compares") and vs the equipped gear ("equipped.compares"). Only items are
+-- swapped; the build's tree, skills and config stay as they are. "load" drops
+-- the live set, so send "equipped" again after loading a build.
 
 local realStdout = io.stdout
 local function logErr(...)
@@ -64,18 +73,32 @@ local summaryStats = {
 	{ key = "Int", label = "Int" },
 }
 
+-- Minion builds: the main skill's minion DPS (CombinedDPS includes DoTs)
+local function minionDPS(output)
+	local minion = output and output.Minion
+	if type(minion) ~= "table" then
+		return nil
+	end
+	local value = minion.CombinedDPS or minion.TotalDPS
+	return type(value) == "number" and value or nil
+end
+
+local function addSummaryEntry(out, key, label, old, new)
+	if type(new) == "number" and type(old) == "number" and math.abs(new - old) > 0.001 then
+		local entry = { stat = key, label = label, old = old, new = new, diff = new - old }
+		if old ~= 0 then
+			entry.pct = (new / old - 1) * 100
+		end
+		table.insert(out, entry)
+	end
+end
+
 local function summarise(baseOutput, compareOutput)
 	local out = { }
+	-- Minion DPS first: for minion builds it's the number that matters
+	addSummaryEntry(out, "MinionDPS", "Minion DPS", minionDPS(baseOutput), minionDPS(compareOutput))
 	for _, stat in ipairs(summaryStats) do
-		local new = compareOutput[stat.key]
-		local old = baseOutput[stat.key]
-		if type(new) == "number" and type(old) == "number" and math.abs(new - old) > 0.001 then
-			local entry = { stat = stat.key, label = stat.label, old = old, new = new, diff = new - old }
-			if old ~= 0 then
-				entry.pct = (new / old - 1) * 100
-			end
-			table.insert(out, entry)
-		end
+		addSummaryEntry(out, stat.key, stat.label, baseOutput[stat.key], compareOutput[stat.key])
 	end
 	return out
 end
@@ -92,6 +115,7 @@ local function buildInfo()
 		stats = {
 			FullDPS = output.FullDPS,
 			CombinedDPS = output.CombinedDPS,
+			MinionDPS = minionDPS(output),
 			TotalEHP = output.TotalEHP,
 			Life = output.Life,
 			EnergyShield = output.EnergyShield,
@@ -100,6 +124,41 @@ local function buildInfo()
 end
 
 local loaded = false
+-- Item set the build was saved with, and the hidden set holding live gear
+local buildSetId = nil
+local liveSetId = nil
+local liveInfo = nil
+local LIVE_PREFIX = "live:"
+
+local function recalc()
+	build.buildFlag = true
+	runCallback("OnFrame")
+end
+
+-- Make the given item set active and recalculate (only if it isn't already)
+local function useItemSet(setId)
+	local itemsTab = build.itemsTab
+	if itemsTab.activeItemSetId ~= setId then
+		itemsTab:SetActiveItemSet(setId)
+		recalc()
+	end
+end
+
+-- Snapshot of the numbers summarise() reads. (The output table has cycles,
+-- so copyTable can't be used on it.)
+local function copyOutput(output)
+	local out = { }
+	for key, value in pairs(output or { }) do
+		if type(value) == "number" then
+			out[key] = value
+		end
+	end
+	local minion = output and output.Minion
+	if type(minion) == "table" then
+		out.Minion = { CombinedDPS = minion.CombinedDPS, TotalDPS = minion.TotalDPS }
+	end
+	return out
+end
 
 local function readFile(path)
 	local f, err = io.open(path, "rb")
@@ -130,12 +189,16 @@ function handlers.load(req)
 		error("load needs 'path' or 'xml'")
 	end
 	local name = req.name or (req.path and req.path:match("([^/\\]+)%.xml$")) or "Build"
+	loaded = false
+	liveSetId = nil
+	liveInfo = nil
 	loadBuildFromXML(xml, name)
 	-- A couple of extra frames so deferred rebuilds (sockets, calcs) settle
 	runCallback("OnFrame")
 	if not build.calcsTab.mainOutput then
 		error("PoB could not calculate this build")
 	end
+	buildSetId = build.itemsTab.activeItemSetId
 	loaded = true
 	return { build = buildInfo() }
 end
@@ -144,25 +207,160 @@ function handlers.info()
 	if not loaded then
 		error("No build loaded")
 	end
-	return { build = buildInfo() }
+	useItemSet(buildSetId)
+	return { build = buildInfo(), equipped = liveInfo }
 end
 
-function handlers.impact(req)
+-- Slots the character API uses that we leave alone: tree jewels belong to the
+-- build's passive tree, the rest aren't gear PoB calculates.
+local skipInventory = {
+	PassiveJewels = true,
+	MainInventory = true,
+	ExpandedMainInventory = true,
+	Cursor = true,
+}
+
+local function prepareLiveItem(itemData, index)
+	local copy = copyTable(itemData)
+	-- Prefix IDs so PoB's importer never overwrites the build's own copy of the
+	-- same game item (it matches items by ID).
+	copy.id = LIVE_PREFIX .. tostring(itemData.id or index)
+	if copy.socketedItems then
+		-- Keep abyss jewels; drop gems so the build's skills stay untouched
+		local kept = { }
+		for i, socketed in ipairs(copy.socketedItems) do
+			if socketed.abyssJewel then
+				socketed.id = LIVE_PREFIX .. tostring(socketed.id or (index .. "-" .. i))
+				table.insert(kept, socketed)
+			end
+		end
+		copy.socketedItems = kept
+	end
+	return copy
+end
+
+local function importEquipped(req)
 	if not loaded then
 		error("No build loaded")
 	end
-	if type(req.item) ~= "string" or req.item == "" then
-		error("impact needs 'item' (the item text copied from the game)")
+	if type(req.items) ~= "table" then
+		error("equipped needs 'items' (the character's equipped items)")
 	end
 	local itemsTab = build.itemsTab
-	local itemText = req.item:gsub("\r\n", "\n")
+	local importTab = build.importTab
+
+	-- Drop the previous live items, then (re)create the hidden set
+	local old = { }
+	for _, item in pairs(itemsTab.items) do
+		if type(item.uniqueID) == "string" and item.uniqueID:sub(1, #LIVE_PREFIX) == LIVE_PREFIX then
+			table.insert(old, item)
+		end
+	end
+	for _, item in ipairs(old) do
+		itemsTab:DeleteItem(item, true)
+	end
+	if not liveSetId or not itemsTab.itemSets[liveSetId] then
+		local set = itemsTab:NewItemSet()
+		set.title = "Equipped (live)"
+		liveSetId = set.id
+	end
+
+	-- Import with the live set active, so abyss jewels land in it too
+	if itemsTab.activeItemSetId ~= liveSetId then
+		itemsTab:SetActiveItemSet(liveSetId)
+	end
+	local imported, skipped = 0, { }
+	for index, itemData in ipairs(req.items) do
+		if type(itemData) == "table" and not skipInventory[itemData.inventoryId] then
+			local before = 0
+			for _ in pairs(itemsTab.items) do before = before + 1 end
+			local ok, err = pcall(importTab.ImportItem, importTab, prepareLiveItem(itemData, index))
+			local after = 0
+			for _ in pairs(itemsTab.items) do after = after + 1 end
+			if ok and after > before then
+				imported = imported + 1
+			else
+				local label = tostring(itemData.name ~= "" and itemData.name or itemData.typeLine)
+				if not ok then
+					logErr("Live item " .. label .. " failed: " .. tostring(err))
+				end
+				table.insert(skipped, label)
+			end
+		end
+	end
+	recalc()
+	local liveOutput = copyOutput(build.calcsTab.mainOutput)
+	useItemSet(buildSetId)
+	local buildOutput = build.calcsTab.mainOutput or { }
+
+	local character = type(req.character) == "table" and req.character or { }
+	liveInfo = {
+		character = character.name,
+		class = character.class,
+		level = character.level,
+		league = character.league,
+		items = imported,
+		skipped = skipped,
+		-- How the equipped gear compares to the build's gear
+		summary = summarise(buildOutput, liveOutput),
+	}
+	return { equipped = liveInfo }
+end
+
+local function clearLive()
+	if loaded and liveSetId then
+		local itemsTab = build.itemsTab
+		if itemsTab.activeItemSetId == liveSetId then
+			itemsTab:SetActiveItemSet(buildSetId)
+		end
+		local old = { }
+		for _, item in pairs(itemsTab.items) do
+			if type(item.uniqueID) == "string" and item.uniqueID:sub(1, #LIVE_PREFIX) == LIVE_PREFIX then
+				table.insert(old, item)
+			end
+		end
+		for _, item in ipairs(old) do
+			itemsTab:DeleteItem(item, true)
+		end
+		itemsTab.itemSets[liveSetId] = nil
+		recalc()
+	end
+	liveSetId = nil
+	liveInfo = nil
+end
+
+function handlers.equipped(req)
+	local ok, result = pcall(importEquipped, req)
+	if not ok then
+		-- Never leave a half-imported set behind
+		pcall(clearLive)
+		error(result, 0)
+	end
+	return result
+end
+
+function handlers.clearEquipped()
+	clearLive()
+	return { cleared = true }
+end
+
+-- Parse the item text fresh for each comparison: anoints are copied from the
+-- item currently equipped in the active set.
+local function parseItem(itemText)
 	local item = new("Item"):Item(itemText)
 	if not item.base then
 		error("PoB doesn't recognise this item's base type")
 	end
-	itemsTab:CopyAnointsAndEldritchImplicits(item, main.migrateEldritchImplicits, false)
+	build.itemsTab:CopyAnointsAndEldritchImplicits(item, main.migrateEldritchImplicits, false)
 	item:NormaliseQuality()
 	item:BuildModList()
+	return item
+end
+
+-- Compare the item against the active item set, the same way PoB's tooltip does
+local function compareItem(itemText)
+	local itemsTab = build.itemsTab
+	local item = parseItem(itemText)
 
 	-- Collect what PoB would show in the tooltip. Capture the raw outputs as
 	-- well so the panel can show a compact numeric summary.
@@ -213,16 +411,55 @@ function handlers.impact(req)
 		end
 	end
 
-	return {
-		item = {
-			name = item.name,
-			rarity = item.rarity,
-			baseName = item.baseName,
-			type = item.base.type,
-		},
-		compares = compares,
-		lines = extraLines,
-	}
+	return item, compares, extraLines
+end
+
+function handlers.impact(req)
+	if not loaded then
+		error("No build loaded")
+	end
+	if type(req.item) ~= "string" or req.item == "" then
+		error("impact needs 'item' (the item text copied from the game)")
+	end
+	local itemText = req.item:gsub("\r\n", "\n")
+
+	-- Compare against whichever set is active first, so each request costs at
+	-- most one item-set switch (and one recalculation).
+	local sets = { { key = "build", id = buildSetId } }
+	if liveSetId then
+		local live = { key = "live", id = liveSetId }
+		if build.itemsTab.activeItemSetId == liveSetId then
+			table.insert(sets, 1, live)
+		else
+			table.insert(sets, live)
+		end
+	end
+
+	local reply = { }
+	for _, set in ipairs(sets) do
+		local ok, item, compares, extraLines = pcall(function()
+			useItemSet(set.id)
+			return compareItem(itemText)
+		end)
+		if set.key == "build" then
+			if not ok then
+				error(item, 0)
+			end
+			reply.item = {
+				name = item.name,
+				rarity = item.rarity,
+				baseName = item.baseName,
+				type = item.base.type,
+			}
+			reply.compares = compares
+			reply.lines = extraLines
+		elseif ok then
+			reply.equipped = { compares = compares, lines = extraLines, info = liveInfo }
+		else
+			reply.equippedError = tostring(item)
+		end
+	end
+	return reply
 end
 
 function handlers.quit()
