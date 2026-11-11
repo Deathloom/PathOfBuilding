@@ -17,18 +17,21 @@
 --   {"id":2,"cmd":"load","path":"D:/.../MyBuild.xml"}      (or "xml":"<PathOfBuilding>...")
 --   {"id":3,"cmd":"impact","item":"Item Class: Rings\nRarity: Rare\n..."}
 --   {"id":4,"cmd":"info"}
---   {"id":5,"cmd":"equipped","items":[...],"character":{...}}   (live gear, see below)
+--   {"id":5,"cmd":"equipped","items":[...],"passives":{...},"skills":true,"character":{...}}
 --   {"id":6,"cmd":"clearEquipped"}
 --   {"id":7,"cmd":"quit"}
 --
 -- Replies: {"id":n,"ok":true,...} or {"id":n,"ok":false,"error":"..."}
 --
--- Live gear: "equipped" takes the "items" array of the character's equipped
--- items (the JSON the public Characters tab returns) and puts them in a hidden
--- item set. After that, "impact" answers twice: vs the build's own gear
--- ("compares") and vs the equipped gear ("equipped.compares"). Only items are
--- swapped; the build's tree, skills and config stay as they are. "load" drops
--- the live set, so send "equipped" again after loading a build.
+-- Live character: "equipped" takes what the public Characters tab returns:
+-- "items" (get-items), optionally "passives" (get-passive-skills: tree +
+-- tree jewels) and "skills":true (use the gems socketed in those items). They
+-- go into a hidden loadout (item set, skill set, tree spec, level). After that,
+-- "impact" answers twice: vs the build ("compares") and vs the live character
+-- ("equipped.compares"). The build's config (enemy, buffs, bandit, pantheon)
+-- is used for both. Main skill on the character: the build's main skill if
+-- the character has it, otherwise PoB's guess. "load" drops the live
+-- loadout, so send "equipped" again after loading a build.
 
 local realStdout = io.stdout
 local function logErr(...)
@@ -124,22 +127,60 @@ local function buildInfo()
 end
 
 local loaded = false
--- Item set the build was saved with, and the hidden set holding live gear
-local buildSetId = nil
-local liveSetId = nil
+-- A loadout is everything that differs between the build and the live
+-- character: item set, skill set, tree spec, main skill and level. Config
+-- (enemy, buffs, bandit, pantheon) always stays the build's.
+local buildLoadout = nil
+local liveLoadout = nil
+local activeLoadout = nil
 local liveInfo = nil
+local buildMainSkill = nil
 local LIVE_PREFIX = "live:"
+-- buildMode keeps its methods on the object itself, so keep the original
+local origSyncLoadouts = build.SyncLoadouts
 
 local function recalc()
 	build.buildFlag = true
 	runCallback("OnFrame")
 end
 
--- Make the given item set active and recalculate (only if it isn't already)
-local function useItemSet(setId)
-	local itemsTab = build.itemsTab
-	if itemsTab.activeItemSetId ~= setId then
-		itemsTab:SetActiveItemSet(setId)
+local function captureLoadout()
+	return {
+		itemSet = build.itemsTab.activeItemSetId,
+		skillSet = build.skillsTab.activeSkillSetId,
+		spec = build.treeTab.activeSpec,
+		mainSocketGroup = build.mainSocketGroup,
+		level = build.characterLevel,
+	}
+end
+
+-- Switch to a loadout without recalculating. Returns true if anything changed.
+local function applyLoadout(l)
+	if activeLoadout == l then
+		return false
+	end
+	if activeLoadout then
+		-- Remember the main skill choice of the loadout we leave
+		activeLoadout.mainSocketGroup = build.mainSocketGroup
+	end
+	if build.itemsTab.activeItemSetId ~= l.itemSet then
+		build.itemsTab:SetActiveItemSet(l.itemSet)
+	end
+	if build.skillsTab.activeSkillSetId ~= l.skillSet then
+		build.skillsTab:SetActiveSkillSet(l.skillSet)
+	end
+	if build.treeTab.activeSpec ~= l.spec then
+		build.treeTab:SetActiveSpec(l.spec)
+	end
+	build.mainSocketGroup = l.mainSocketGroup
+	build.characterLevel = l.level
+	build.configTab:UpdateLevel()
+	activeLoadout = l
+	return true
+end
+
+local function useLoadout(l)
+	if applyLoadout(l) then
 		recalc()
 	end
 end
@@ -190,29 +231,38 @@ function handlers.load(req)
 	end
 	local name = req.name or (req.path and req.path:match("([^/\\]+)%.xml$")) or "Build"
 	loaded = false
-	liveSetId = nil
+	liveLoadout = nil
 	liveInfo = nil
+	-- Normal loadout syncing while PoB loads the build (see below)
+	build.SyncLoadouts = origSyncLoadouts
 	loadBuildFromXML(xml, name)
 	-- A couple of extra frames so deferred rebuilds (sockets, calcs) settle
 	runCallback("OnFrame")
 	if not build.calcsTab.mainOutput then
 		error("PoB could not calculate this build")
 	end
-	buildSetId = build.itemsTab.activeItemSetId
+	-- PoB's loadout dropdown re-selects a matching loadout whenever a set
+	-- changes, which would switch item sets in the middle of our swaps. It
+	-- only drives the UI, so turn it off for this build object.
+	build.SyncLoadouts = function() end
+	buildLoadout = captureLoadout()
+	activeLoadout = buildLoadout
+	local info = buildInfo()
+	buildMainSkill = info.mainSkill
 	loaded = true
-	return { build = buildInfo() }
+	return { build = info }
 end
 
 function handlers.info()
 	if not loaded then
 		error("No build loaded")
 	end
-	useItemSet(buildSetId)
+	useLoadout(buildLoadout)
 	return { build = buildInfo(), equipped = liveInfo }
 end
 
--- Slots the character API uses that we leave alone: tree jewels belong to the
--- build's passive tree, the rest aren't gear PoB calculates.
+-- Inventories we leave alone: tree jewels come with the passive tree (and are
+-- only used when the tree is imported), the rest isn't gear PoB calculates.
 local skipInventory = {
 	PassiveJewels = true,
 	MainInventory = true,
@@ -220,23 +270,162 @@ local skipInventory = {
 	Cursor = true,
 }
 
-local function prepareLiveItem(itemData, index)
+local function isLiveItem(item)
+	return type(item.uniqueID) == "string" and item.uniqueID:sub(1, #LIVE_PREFIX) == LIVE_PREFIX
+end
+
+local function prepareLiveItem(itemData, index, keepGems)
 	local copy = copyTable(itemData)
 	-- Prefix IDs so PoB's importer never overwrites the build's own copy of the
 	-- same game item (it matches items by ID).
 	copy.id = LIVE_PREFIX .. tostring(itemData.id or index)
 	if copy.socketedItems then
-		-- Keep abyss jewels; drop gems so the build's skills stay untouched
 		local kept = { }
 		for i, socketed in ipairs(copy.socketedItems) do
 			if socketed.abyssJewel then
 				socketed.id = LIVE_PREFIX .. tostring(socketed.id or (index .. "-" .. i))
+				table.insert(kept, socketed)
+			elseif keepGems then
 				table.insert(kept, socketed)
 			end
 		end
 		copy.socketedItems = kept
 	end
 	return copy
+end
+
+-- Remove everything the live loadout added. The build loadout must be active.
+local function removeLive()
+	local itemsTab, skillsTab, treeTab = build.itemsTab, build.skillsTab, build.treeTab
+	if liveLoadout then
+		if liveLoadout.spec ~= buildLoadout.spec and treeTab.specList[liveLoadout.spec] then
+			table.remove(treeTab.specList, liveLoadout.spec)
+		end
+		if liveLoadout.skillSet ~= buildLoadout.skillSet then
+			skillsTab.skillSets[liveLoadout.skillSet] = nil
+		end
+		if liveLoadout.itemSet ~= buildLoadout.itemSet then
+			itemsTab.itemSets[liveLoadout.itemSet] = nil
+		end
+	end
+	local old = { }
+	for _, item in pairs(itemsTab.items) do
+		if isLiveItem(item) then
+			table.insert(old, item)
+		end
+	end
+	for _, item in ipairs(old) do
+		itemsTab:DeleteItem(item, true)
+	end
+	liveLoadout = nil
+	liveInfo = nil
+end
+
+-- Same tree-version choice as PoB's character import
+local function liveTreeVersion(className, league)
+	local inLatest = false
+	for _, class in pairs(main.tree[latestTreeVersion].classes) do
+		if class.name == className then
+			inLatest = true
+		end
+		for i = 0, #class.classes do
+			if class.classes[i] and class.classes[i].name == className then
+				inLatest = true
+			end
+		end
+	end
+	local ruthless = type(league) == "string" and league:match("Ruthless") and "_ruthless" or ""
+	return latestTreeVersion .. ruthless .. (inLatest and "" or "_alternate")
+end
+
+-- Import the passive tree into a new spec (the live loadout's). Only the tree
+-- and its jewels: unlike PoB's character import, config and level are not
+-- touched here.
+local function importTree(passives, character, index)
+	local treeTab, importTab = build.treeTab, build.importTab
+	local spec = new("PassiveSpec"):PassiveSpec(build, liveTreeVersion(character.class, character.league))
+	spec.title = "Live character"
+	table.insert(treeTab.specList, spec)
+	local specIndex = #treeTab.specList
+	treeTab:SetActiveSpec(specIndex)
+
+	local masteries = { }
+	for key, value in pairs(passives.mastery_effects or { }) do
+		masteries[tonumber(key)] = value
+	end
+	spec.jewel_data = { }
+	for key, value in pairs(passives.jewel_data or { }) do
+		spec.jewel_data[tonumber(key)] = value
+	end
+	local overrides = { }
+	for nodeId, override in pairs(passives.skill_overrides or { }) do
+		local tattoo = spec.tree.tattoo and spec.tree.tattoo.nodes[override.name]
+		if tattoo then
+			spec:ReplaceNode(override, tattoo)
+			override.id = tonumber(nodeId)
+			overrides[tonumber(nodeId)] = override
+		end
+	end
+	spec.extended_hashes = copyTable(passives.hashes_ex or { })
+	-- Jewels first, so cluster jewel nodes can be allocated
+	local jewels, skippedJewels = 0, { }
+	for i, itemData in ipairs(passives.items or { }) do
+		local ok, err = pcall(importTab.ImportItem, importTab, prepareLiveItem(itemData, "j" .. i, false))
+		if ok then
+			jewels = jewels + 1
+		else
+			logErr("Live jewel failed: " .. tostring(err))
+			table.insert(skippedJewels, tostring(itemData.name ~= "" and itemData.name or itemData.typeLine))
+		end
+	end
+	local alternate = passives.alternate_ascendancy or 0
+	if type(alternate) == "string" then
+		local bloodline = build.latestTree.secondaryAscendNameMap[alternate]
+		alternate = bloodline and bloodline.ascendClassId or 0
+	end
+	spec.clusterHashFormatVersion = 2
+	spec:ImportFromNodeList(character.class, nil, nil, alternate, passives.hashes or { }, overrides, masteries, spec.treeVersion)
+	-- Re-select the spec so the socketed jewels are stored in it
+	treeTab:SetActiveSpec(specIndex)
+	spec:BuildClusterJewelGraphs()
+	local nodes = 0
+	for _ in pairs(spec.allocNodes) do nodes = nodes + 1 end
+	return specIndex, nodes, jewels, skippedJewels
+end
+
+-- Pick the live character's main skill: the build's main skill if the
+-- character has it, otherwise PoB's guess (the largest socket group).
+local function chooseLiveMainSkill()
+	local skillsTab = build.skillsTab
+	skillsTab:UpdateSocketGroups()
+	local found
+	for index, group in ipairs(skillsTab.socketGroupList) do
+		for _, gem in ipairs(group.gemList) do
+			local effect = gem.grantedEffect or (gem.gemData and gem.gemData.grantedEffect)
+			if effect and not effect.support and effect.name == buildMainSkill then
+				found = index
+				break
+			end
+		end
+		if found then break end
+	end
+	build.mainSocketGroup = found or build.importTab:GuessMainSocketGroup()
+	recalc()
+	-- Point the group at the right active skill (groups can hold several)
+	local group = skillsTab.socketGroupList[build.mainSocketGroup]
+	if found and group and group.displaySkillList then
+		for i, skill in ipairs(group.displaySkillList) do
+			if skill.activeEffect and skill.activeEffect.grantedEffect.name == buildMainSkill then
+				if group.mainActiveSkill ~= i then
+					group.mainActiveSkill = i
+					recalc()
+				end
+				break
+			end
+		end
+	end
+	local mainSkill = build.calcsTab.mainEnv and build.calcsTab.mainEnv.player.mainSkill
+	return mainSkill and mainSkill.activeEffect and mainSkill.activeEffect.grantedEffect.name or nil, found ~= nil
 end
 
 local function importEquipped(req)
@@ -246,35 +435,57 @@ local function importEquipped(req)
 	if type(req.items) ~= "table" then
 		error("equipped needs 'items' (the character's equipped items)")
 	end
-	local itemsTab = build.itemsTab
-	local importTab = build.importTab
+	local itemsTab, skillsTab, importTab = build.itemsTab, build.skillsTab, build.importTab
+	local character = type(req.character) == "table" and req.character or { }
+	local passives = type(req.passives) == "table" and req.passives or nil
+	local useTree = passives ~= nil and type(character.class) == "string"
+	local useSkills = req.skills == true
 
-	-- Drop the previous live items, then (re)create the hidden set
-	local old = { }
-	for _, item in pairs(itemsTab.items) do
-		if type(item.uniqueID) == "string" and item.uniqueID:sub(1, #LIVE_PREFIX) == LIVE_PREFIX then
-			table.insert(old, item)
-		end
+	useLoadout(buildLoadout)
+	removeLive()
+
+	local live = {
+		itemSet = itemsTab:NewItemSet().id,
+		skillSet = buildLoadout.skillSet,
+		spec = buildLoadout.spec,
+		mainSocketGroup = buildLoadout.mainSocketGroup,
+		level = buildLoadout.level,
+	}
+	itemsTab.itemSets[live.itemSet].title = "Live character"
+	if useSkills then
+		live.skillSet = skillsTab:NewSkillSet().id
+		skillsTab.skillSets[live.skillSet].title = "Live character"
 	end
-	for _, item in ipairs(old) do
-		itemsTab:DeleteItem(item, true)
+	if tonumber(character.level) then
+		live.level = tonumber(character.level)
 	end
-	if not liveSetId or not itemsTab.itemSets[liveSetId] then
-		local set = itemsTab:NewItemSet()
-		set.title = "Equipped (live)"
-		liveSetId = set.id
+	liveLoadout = live
+	-- Import with the live loadout active, so items, abyss jewels and gems land in it
+	applyLoadout(live)
+
+	local info = {
+		character = character.name,
+		class = character.class,
+		level = character.level,
+		league = character.league,
+		tree = false,
+		skills = useSkills,
+	}
+	if useTree then
+		local specIndex, nodes, jewels, skippedJewels = importTree(passives, character, #req.items + 1)
+		live.spec = specIndex
+		info.tree = true
+		info.nodes = nodes
+		info.jewels = jewels
+		info.skippedJewels = skippedJewels
 	end
 
-	-- Import with the live set active, so abyss jewels land in it too
-	if itemsTab.activeItemSetId ~= liveSetId then
-		itemsTab:SetActiveItemSet(liveSetId)
-	end
 	local imported, skipped = 0, { }
 	for index, itemData in ipairs(req.items) do
 		if type(itemData) == "table" and not skipInventory[itemData.inventoryId] then
 			local before = 0
 			for _ in pairs(itemsTab.items) do before = before + 1 end
-			local ok, err = pcall(importTab.ImportItem, importTab, prepareLiveItem(itemData, index))
+			local ok, err = pcall(importTab.ImportItem, importTab, prepareLiveItem(itemData, index, useSkills))
 			local after = 0
 			for _ in pairs(itemsTab.items) do after = after + 1 end
 			if ok and after > before then
@@ -288,51 +499,38 @@ local function importEquipped(req)
 			end
 		end
 	end
-	recalc()
-	local liveOutput = copyOutput(build.calcsTab.mainOutput)
-	useItemSet(buildSetId)
-	local buildOutput = build.calcsTab.mainOutput or { }
+	info.items = imported
+	info.skipped = skipped
 
-	local character = type(req.character) == "table" and req.character or { }
-	liveInfo = {
-		character = character.name,
-		class = character.class,
-		level = character.level,
-		league = character.league,
-		items = imported,
-		skipped = skipped,
-		-- How the equipped gear compares to the build's gear
-		summary = summarise(buildOutput, liveOutput),
-	}
-	return { equipped = liveInfo }
+	if useSkills then
+		info.mainSkill, info.mainSkillMatched = chooseLiveMainSkill()
+	else
+		recalc()
+		info.mainSkill, info.mainSkillMatched = buildMainSkill, true
+	end
+	live.mainSocketGroup = build.mainSocketGroup
+	local liveOutput = copyOutput(build.calcsTab.mainOutput)
+	useLoadout(buildLoadout)
+	-- How the live character compares to the build
+	info.summary = summarise(build.calcsTab.mainOutput or { }, liveOutput)
+	liveInfo = info
+	return { equipped = info }
 end
 
 local function clearLive()
-	if loaded and liveSetId then
-		local itemsTab = build.itemsTab
-		if itemsTab.activeItemSetId == liveSetId then
-			itemsTab:SetActiveItemSet(buildSetId)
-		end
-		local old = { }
-		for _, item in pairs(itemsTab.items) do
-			if type(item.uniqueID) == "string" and item.uniqueID:sub(1, #LIVE_PREFIX) == LIVE_PREFIX then
-				table.insert(old, item)
-			end
-		end
-		for _, item in ipairs(old) do
-			itemsTab:DeleteItem(item, true)
-		end
-		itemsTab.itemSets[liveSetId] = nil
+	if loaded then
+		useLoadout(buildLoadout)
+		removeLive()
 		recalc()
 	end
-	liveSetId = nil
+	liveLoadout = nil
 	liveInfo = nil
 end
 
 function handlers.equipped(req)
 	local ok, result = pcall(importEquipped, req)
 	if not ok then
-		-- Never leave a half-imported set behind
+		-- Never leave a half-imported loadout behind
 		pcall(clearLive)
 		error(result, 0)
 	end
@@ -423,12 +621,12 @@ function handlers.impact(req)
 	end
 	local itemText = req.item:gsub("\r\n", "\n")
 
-	-- Compare against whichever set is active first, so each request costs at
-	-- most one item-set switch (and one recalculation).
-	local sets = { { key = "build", id = buildSetId } }
-	if liveSetId then
-		local live = { key = "live", id = liveSetId }
-		if build.itemsTab.activeItemSetId == liveSetId then
+	-- Compare against whichever loadout is active first, so each request costs
+	-- at most one switch (and one recalculation).
+	local sets = { { key = "build", loadout = buildLoadout } }
+	if liveLoadout then
+		local live = { key = "live", loadout = liveLoadout }
+		if activeLoadout == liveLoadout then
 			table.insert(sets, 1, live)
 		else
 			table.insert(sets, live)
@@ -438,7 +636,7 @@ function handlers.impact(req)
 	local reply = { }
 	for _, set in ipairs(sets) do
 		local ok, item, compares, extraLines = pcall(function()
-			useItemSet(set.id)
+			useLoadout(set.loadout)
 			return compareItem(itemText)
 		end)
 		if set.key == "build" then
