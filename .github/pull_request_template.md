@@ -12,3 +12,8 @@ Fixes # .
 ### Before screenshot:
 
 ### After screenshot:
+
+### Fork checklist
+- [ ] Added a line to `FORK-CHANGELOG.md` under **Unreleased** (skip for upstream merges)
+- [ ] Updated the fork section of `README.md` if a feature or setup step changed
+- [ ] Targets **Deathloom/PathOfBuilding** `dev`, never upstream

@@ -1,3 +1,23 @@
+# Path of Building — Loot Goblin fork
+
+This is our group's fork of [Path of Building Community](https://github.com/PathOfBuildingCommunity/PathOfBuilding) for **Path of Exile 1**. It works together with [Loot Goblin](https://github.com/Deathloom/awakened-poe-trade), our overlay. Builds are shared through the private [POE-Builds/poe-builds](https://github.com/POE-Builds/poe-builds) repo.
+
+**Added in this fork:**
+- **Build sync:** sign in with GitHub under **Sync...**. Your builds then pull when PoB starts and push a few seconds after you save. **Sync now** does both on demand. Conflicts are never overwritten: GitHub's version is saved as `<name> (GitHub copy).xml`. PoB works fine without signing in.
+- **First-run setup:** a "Share builds with your group?" prompt walks you through signing in and picking your player folder. **Help** in Sync... has the steps for friends.
+- **Headless server for Loot Goblin** (`src/ImpactServer.lua` + `runtime/PoBHeadless.exe`): answers "what does this item do to my build?" and supplies the build's gear, gems, tree and loadouts to the overlay. It uses PoB's own calculations, so the numbers match the PoB window.
+- Updates come from this fork, not the official PoB.
+
+Fork changes are listed in [FORK-CHANGELOG.md](./FORK-CHANGELOG.md). `CHANGELOG.md` and `changelog.txt` are upstream's and are left untouched, so upstream merges stay clean.
+
+**Maintaining:** work on `fork/...` branches with PRs into `dev`. Each PR adds a line to `FORK-CHANGELOG.md`. Nothing is ever pushed to the upstream project. The **Upstream release check** workflow opens a PR here when PoB Community has a new release.
+
+MIT licence, same as upstream ([LICENSE.md](./LICENSE.md)). All credit for Path of Building goes to David Gowor and the PoB Community contributors. Not affiliated with Grinding Gear Games.
+
+---
+
+*Upstream README below.*
+
 # Path of Building Community
 ## Welcome to Path of Building, an offline build planner for Path of Exile!
 
