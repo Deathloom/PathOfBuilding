@@ -15,7 +15,7 @@
 -- for replies. All logging goes to stderr.
 --
 --   {"id":1,"cmd":"ping"}
---   {"id":2,"cmd":"load","path":"D:/.../MyBuild.xml"}      (or "xml":"<PathOfBuilding>...")
+--   {"id":2,"cmd":"load","path":"C:/.../MyBuild.xml"}      (or "xml":"<PathOfBuilding>...")
 --   {"id":3,"cmd":"impact","item":"Item Class: Rings\nRarity: Rare\n..."}
 --   {"id":4,"cmd":"info"}
 --   {"id":5,"cmd":"equipped","items":[...],"passives":{...},"skills":true,"character":{...}}

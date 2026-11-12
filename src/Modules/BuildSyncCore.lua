@@ -5,8 +5,8 @@
 -- Kept separate so it can be unit-tested headless (spec/System/TestBuildSync_spec.lua).
 --
 -- Terms:
---   rel        path relative to main.buildPath, "/" separated (e.g. "Deathloom/RF Jugg.xml")
---   remotePath path in the GitHub repo (e.g. "poe1/Deathloom/RF Jugg.xml")
+--   rel        path relative to main.buildPath, "/" separated (e.g. "PlayerOne/RF Jugg.xml")
+--   remotePath path in the GitHub repo (e.g. "poe1/PlayerOne/RF Jugg.xml")
 --   L / R / B  local sha, remote sha, base sha (remote sha at our last successful sync)
 -- All shas are git blob shas, so a local file can be compared with the GitHub tree without downloading it.
 --
@@ -44,7 +44,7 @@ function core.toRel(root, remotePath)
 	end
 end
 
--- "Deathloom/RF Jugg.xml" -> "Deathloom/RF Jugg (GitHub copy).xml"
+-- "PlayerOne/RF Jugg.xml" -> "PlayerOne/RF Jugg (GitHub copy).xml"
 function core.copyName(rel)
 	local base, ext = rel:match("^(.*)(%.[^./]+)$")
 	if not base then
