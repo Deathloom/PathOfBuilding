@@ -607,6 +607,14 @@ function sync:OnFrame()
 	if not self.startupDone and main.mode == "LIST" and main.buildPath then
 		self.startupDone = true
 		self:Load()
+		-- Signed in already (session shared via Credential Manager, e.g. the copy bundled in
+		-- Loot Goblin starting with a fresh BuildSync.json): use the GitHub name as player folder
+		local session = self:GetSession()
+		if self.settings.player == "" and session and session.login and core.validPlayer(session.login) then
+			self.settings.player = session.login
+			self.prefs.setupAsked = true
+			self:Save()
+		end
 		if not self.prefs.setupAsked and not self:HasAuth() then
 			self:OpenWelcomePopup()
 		elseif self:AutoReady() then
