@@ -1,4 +1,4 @@
--- cspell:ignore Deathloom deathloom DZLD Adevice Agrant Aietf Aoauth Aparams organisation
+-- cspell:ignore PlayerOne playerone DZLD Adevice Agrant Aietf Aoauth Aparams organisation
 describe("BuildSyncAuth", function()
 	local auth = require("Modules.BuildSyncAuth")
 
@@ -9,12 +9,12 @@ describe("BuildSyncAuth", function()
 	end)
 
 	it("turns token responses into sessions", function()
-		local s = auth.sessionFromToken({ access_token = "ghu_a", expires_in = 28800, refresh_token = "ghr_b", refresh_token_expires_in = 15897600 }, 1000, "Deathloom")
+		local s = auth.sessionFromToken({ access_token = "ghu_a", expires_in = 28800, refresh_token = "ghr_b", refresh_token_expires_in = 15897600 }, 1000, "PlayerOne")
 		assert.are.equals("ghu_a", s.access)
 		assert.are.equals("ghr_b", s.refresh)
 		assert.are.equals(29800, s.accessExp)
 		assert.are.equals(15898600, s.refreshExp)
-		assert.are.equals("Deathloom", s.login)
+		assert.are.equals("PlayerOne", s.login)
 		local none, err = auth.sessionFromToken({ error = "bad_refresh_token" }, 1000)
 		assert.is_nil(none)
 		assert.are.equals("Your GitHub sign-in has run out. Sign in again.", err)
@@ -42,10 +42,10 @@ describe("BuildSyncAuth", function()
 	end)
 
 	it("only auto-pushes the player's own builds", function()
-		assert.is_true(auth.isOwnBuild("D:\\Builds\\Deathloom\\3.29\\RF.xml", "D:/Builds/", "Deathloom"))
-		assert.is_true(auth.isOwnBuild("d:/builds/deathloom/RF.xml", "D:\\Builds", "Deathloom"))
-		assert.is_false(auth.isOwnBuild("D:/Builds/Friend/RF.xml", "D:/Builds/", "Deathloom"))
-		assert.is_false(auth.isOwnBuild("D:/Builds/DeathloomX/RF.xml", "D:/Builds/", "Deathloom"))
+		assert.is_true(auth.isOwnBuild("D:\\Builds\\PlayerOne\\3.29\\RF.xml", "D:/Builds/", "PlayerOne"))
+		assert.is_true(auth.isOwnBuild("d:/builds/playerone/RF.xml", "D:\\Builds", "PlayerOne"))
+		assert.is_false(auth.isOwnBuild("D:/Builds/Friend/RF.xml", "D:/Builds/", "PlayerOne"))
+		assert.is_false(auth.isOwnBuild("D:/Builds/PlayerOneX/RF.xml", "D:/Builds/", "PlayerOne"))
 		assert.is_false(auth.isOwnBuild("D:/Builds/RF.xml", "D:/Builds/", ""))
 	end)
 
