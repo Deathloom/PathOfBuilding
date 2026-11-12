@@ -2317,6 +2317,7 @@ function buildMode:SaveDBFile()
 	end
 	file:write(xmlText)
 	file:close()
+	require("Modules.BuildSync"):NotifySaved(self.dbFileName) -- fork: auto push after save
 	local action = self.actionOnSave
 	self.actionOnSave = nil
 

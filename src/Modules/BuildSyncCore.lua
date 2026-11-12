@@ -98,6 +98,10 @@ function core.planPull(remoteEntries, getLocalSha, state, root)
 				plan.newState[entry.path] = R
 			elseif L == nil or L == B then
 				table.insert(plan.downloads, { rel = rel, remotePath = entry.path, sha = R, target = rel, conflict = false })
+			elseif R == B then
+				-- Only changed here (not pushed yet): nothing to pull
+				plan.upToDate = plan.upToDate + 1
+				plan.localAhead = (plan.localAhead or 0) + 1
 			else
 				table.insert(plan.downloads, { rel = rel, remotePath = entry.path, sha = R, target = core.copyName(rel), conflict = true })
 			end
