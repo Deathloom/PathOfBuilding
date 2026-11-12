@@ -1,4 +1,5 @@
 -- Path of Building (Deathloom fork): headless "build impact" server.
+-- cspell:ignore Deathloom RRGGBB
 --
 -- Loads one build and answers "what happens if I equip this item?" questions
 -- for the overlay. It reuses PoB's own item comparison code (the same code that
@@ -143,7 +144,7 @@ local LIVE_PREFIX = "live:"
 -- buildMode keeps its methods on the object itself, so keep the original
 local origSyncLoadouts = build.SyncLoadouts
 
-local function recalc()
+local function recalculate()
 	build.buildFlag = true
 	runCallback("OnFrame")
 end
@@ -185,7 +186,7 @@ end
 
 local function useLoadout(l)
 	if applyLoadout(l) then
-		recalc()
+		recalculate()
 	end
 end
 
@@ -414,7 +415,7 @@ local function chooseLiveMainSkill()
 		if found then break end
 	end
 	build.mainSocketGroup = found or build.importTab:GuessMainSocketGroup()
-	recalc()
+	recalculate()
 	-- Point the group at the right active skill (groups can hold several)
 	local group = skillsTab.socketGroupList[build.mainSocketGroup]
 	if found and group and group.displaySkillList then
@@ -422,7 +423,7 @@ local function chooseLiveMainSkill()
 			if skill.activeEffect and skill.activeEffect.grantedEffect.name == buildMainSkill then
 				if group.mainActiveSkill ~= i then
 					group.mainActiveSkill = i
-					recalc()
+					recalculate()
 				end
 				break
 			end
@@ -509,7 +510,7 @@ local function importEquipped(req)
 	if useSkills then
 		info.mainSkill, info.mainSkillMatched = chooseLiveMainSkill()
 	else
-		recalc()
+		recalculate()
 		info.mainSkill, info.mainSkillMatched = buildMainSkill, true
 	end
 	live.mainSocketGroup = build.mainSocketGroup
@@ -525,7 +526,7 @@ local function clearLive()
 	if loaded then
 		useLoadout(buildLoadout)
 		removeLive()
-		recalc()
+		recalculate()
 	end
 	liveLoadout = nil
 	liveInfo = nil
@@ -1010,10 +1011,10 @@ function handlers.setLoadout(req)
 		end
 	end
 	build.SyncLoadouts = noSync
-	recalc()
+	recalculate()
 	if build.mainSocketGroup > #skillsTab.socketGroupList then
 		build.mainSocketGroup = build.importTab:GuessMainSocketGroup()
-		recalc()
+		recalculate()
 	end
 	buildLoadout = captureLoadout()
 	activeLoadout = buildLoadout
