@@ -86,7 +86,7 @@ function main:Init()
 	if not ignoreBuild then
 		self:SetMode("BUILD", false, "Unnamed build")
 	end
-	if launch.devMode or (GetScriptPath() == GetRuntimePath() and not launch.installedMode) then
+	if not launch.bundledMode and (launch.devMode or (GetScriptPath() == GetRuntimePath() and not launch.installedMode)) then
 		-- If running in dev mode or standalone mode, put user data in the script path
 		self.userPath = GetScriptPath().."/"
 	else
@@ -95,7 +95,8 @@ function main:Init()
 		if not self.userPath then
 			self:OpenPathPopup(invalidPath, errMsg, ignoreBuild)
 		else
-			self.userPath = self.userPath.."/Path of Building/"
+			-- Deathloom fork: bundled copy keeps its data in Documents\Loot Goblin
+			self.userPath = self.userPath..(launch.bundledMode and "/Loot Goblin/PathOfBuilding/" or "/Path of Building/")
 		end
 	end
 
@@ -241,7 +242,7 @@ function main:Init()
 		launch:CheckForUpdate()
 	end)
 	self.controls.checkUpdate.shown = function()
-		return not launch.devMode and (not launch.updateAvailable or launch.updateAvailable == "none")
+		return not launch.devMode and not launch.bundledMode and (not launch.updateAvailable or launch.updateAvailable == "none")
 	end
 	self.controls.checkUpdate.label = function()
 		return launch.updateCheckRunning and launch.updateProgress or "Check for Update"
@@ -855,7 +856,9 @@ end
 function main:ChangeUserPath(newUserPath, ignoreBuild)
 	self.userPath = newUserPath
 	MakeDir(self.userPath)
-	self.defaultBuildPath = self.userPath.."Builds/"
+	-- Deathloom fork: bundled copy saves builds in Documents\Loot Goblin\Builds (Loot Goblin's default too)
+	local bundledBuilds = launch.bundledMode and self.userPath:match("^(.*[\\/])PathOfBuilding[\\/]$")
+	self.defaultBuildPath = bundledBuilds and bundledBuilds.."Builds/" or self.userPath.."Builds/"
 	self.buildPath = self.defaultBuildPath
 	MakeDir(self.buildPath)
 	self:LoadSettings(ignoreBuild)
