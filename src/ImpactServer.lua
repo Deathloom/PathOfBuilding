@@ -19,7 +19,8 @@
 --   {"id":4,"cmd":"info"}
 --   {"id":5,"cmd":"equipped","items":[...],"passives":{...},"skills":true,"character":{...}}
 --   {"id":6,"cmd":"clearEquipped"}
---   {"id":7,"cmd":"quit"}
+--   {"id":7,"cmd":"gear"}       (the build's items: slot, mods, game-format text)
+--   {"id":8,"cmd":"quit"}
 --
 -- Replies: {"id":n,"ok":true,...} or {"id":n,"ok":false,"error":"..."}
 --
@@ -658,6 +659,233 @@ function handlers.impact(req)
 		end
 	end
 	return reply
+end
+
+-- Build gear panel: the build's own items (active item set), one entry per
+-- filled slot, with the mod lines PoB shows and the item written out in the
+-- game's Ctrl+C format so the overlay can price-check it or build a trade
+-- search from it.
+
+-- Game's "Rarity:" values; PoB calls foil uniques RELIC
+local gameRarity = {
+	NORMAL = "Normal",
+	MAGIC = "Magic",
+	RARE = "Rare",
+	UNIQUE = "Unique",
+	RELIC = "Unique",
+}
+
+-- Mod lines as PoB's tooltip shows them (ranges applied, variants honoured,
+-- zero-value lines hidden). kind is used for the game-format suffix.
+local function itemModLines(item)
+	local out = { }
+	local function add(list, kind)
+		for _, modLine in ipairs(list or { }) do
+			if item:GetModLineVariantCount(modLine) > 0 then
+				local formatted = itemLib.formatModLine(modLine)
+				if formatted then
+					-- PoB wraps some long lines with \n; it reads them as one line (see getRangedModList)
+					local text = stripColours(formatted):gsub("\n", " ")
+					-- formatModLine may add "(Not supported in PoB yet)"; the game text must not have it
+					local suffix = main.notSupportedTooltipText and stripColours(main.notSupportedTooltipText)
+					if modLine.extra and suffix and suffix ~= "" and text:sub(-#suffix) == suffix then
+						text = text:sub(1, -#suffix - 1)
+					end
+					table.insert(out, {
+						text = text,
+						kind = kind,
+						crafted = modLine.crafted or nil,
+						fractured = modLine.fractured or nil,
+						prefix = modLine.prefix or nil,
+						suffix = modLine.suffix or nil,
+						unsupported = modLine.extra and true or nil,
+					})
+				end
+			end
+		end
+	end
+	add(item.enchantModLines, "enchant")
+	add(item.scourgeModLines, "scourge")
+	add(item.implicitModLines, "implicit")
+	add(item.explicitModLines, "explicit")
+	add(item.crucibleModLines, "crucible")
+	return out
+end
+
+-- PoB tells some bases apart with a suffix the game doesn't use,
+-- e.g. "Two-Toned Boots (Armour/Evasion)"
+local function gameBaseName(item)
+	return (item.baseName:gsub("%s+%b()$", ""))
+end
+
+-- The item in the game's Ctrl+C text format (what the overlay's parser and
+-- PoB's own importer both read)
+local function gameItemText(item, mods)
+	local sections = { }
+	local function section(lines)
+		if #lines > 0 then
+			table.insert(sections, table.concat(lines, "\n"))
+		end
+	end
+	local rarity = gameRarity[item.rarity] or "Rare"
+	local plate = { "Item Class: " .. tostring(item.base and item.base.type or item.type or ""), "Rarity: " .. rarity }
+	if item.title and (rarity == "Rare" or rarity == "Unique") then
+		table.insert(plate, item.title)
+		table.insert(plate, gameBaseName(item))
+	elseif rarity == "Magic" then
+		table.insert(plate, (item.namePrefix or "") .. gameBaseName(item) .. (item.nameSuffix or ""))
+	else
+		table.insert(plate, gameBaseName(item))
+	end
+	section(plate)
+
+	local props = { }
+	if item.quality and item.quality > 0 then
+		table.insert(props, "Quality: +" .. item.quality .. "% (augmented)")
+	end
+	-- Defences as the game shows them; PoB also uses them to tell Two-Toned Boots apart
+	if item.armourData then
+		for _, def in ipairs({ { "Armour", "Armour" }, { "Evasion", "Evasion Rating" }, { "EnergyShield", "Energy Shield" }, { "Ward", "Ward" } }) do
+			local value = item.armourData[def[1]]
+			if value and value > 0 then
+				table.insert(props, def[2] .. ": " .. math.floor(value + 0.5))
+			end
+		end
+	end
+	section(props)
+	if item.sockets and #item.sockets > 0 then
+		local line = "Sockets: "
+		for i, socket in ipairs(item.sockets) do
+			line = line .. socket.color
+			if item.sockets[i + 1] then
+				line = line .. (socket.group == item.sockets[i + 1].group and "-" or " ")
+			end
+		end
+		section({ line })
+	end
+	if item.itemLevel then
+		section({ "Item Level: " .. item.itemLevel })
+	end
+
+	-- Advanced copy format (Ctrl+Alt+C): the overlay's parser needs a
+	-- "{ ... }" header before each implicit/explicit, plain lines aren't read
+	local byKind = { enchant = { }, scourge = { }, implicit = { }, explicit = { } }
+	local isUnique = rarity == "Unique"
+	for _, mod in ipairs(mods) do
+		local list = byKind[mod.kind]
+		if list then
+			if mod.kind == "enchant" then
+				table.insert(list, mod.text .. " (enchant)")
+			elseif mod.kind == "scourge" then
+				table.insert(list, mod.text .. " (scourge)")
+			else
+				local header
+				if mod.kind == "implicit" then
+					header = "Implicit Modifier"
+				elseif mod.fractured then
+					header = mod.suffix and "Fractured Suffix Modifier" or "Fractured Prefix Modifier"
+				elseif mod.crafted then
+					header = mod.suffix and "Master Crafted Suffix Modifier" or "Master Crafted Prefix Modifier"
+				elseif isUnique then
+					header = "Unique Modifier"
+				elseif mod.prefix then
+					header = "Prefix Modifier"
+				elseif mod.suffix then
+					header = "Suffix Modifier"
+				else
+					header = "Modifier"
+				end
+				table.insert(list, "{ " .. header .. " }")
+				table.insert(list, mod.text)
+			end
+		end
+	end
+	section(byKind.enchant)
+	section(byKind.scourge)
+	section(byKind.implicit)
+	section(byKind.explicit)
+
+	local influences = { }
+	for _, info in ipairs(itemLib.influenceInfo.all) do
+		if item[info.key] then
+			table.insert(influences, info.display .. " Item")
+		end
+	end
+	section(influences)
+	if item.split then
+		section({ "Split" })
+	end
+	if item.mirrored then
+		section({ "Mirrored" })
+	end
+	if item.corrupted or item.scourge then
+		section({ "Corrupted" })
+	end
+	return table.concat(sections, "\n--------\n") .. "\n"
+end
+
+local function slotGroup(slot)
+	if slot.nodeId then
+		return "jewel"
+	elseif slot.slotName:match("Abyssal") then
+		return "abyss"
+	elseif slot.slotName:match("^Flask") then
+		return "flask"
+	elseif slot.weaponSet == 2 then
+		return "swap"
+	end
+	return "gear"
+end
+
+function handlers.gear()
+	if not loaded then
+		error("No build loaded")
+	end
+	-- The build's own item set, never the live character's
+	useLoadout(buildLoadout)
+	local itemsTab = build.itemsTab
+	local itemSet = itemsTab.activeItemSet
+	local spec = build.spec
+	local out = { }
+	for _, slot in ipairs(itemsTab.orderedSlots) do
+		local itemId
+		if slot.nodeId then
+			if spec and spec.allocNodes[slot.nodeId] then
+				itemId = spec.jewels[slot.nodeId]
+			end
+		elseif not slot.inactive and itemSet[slot.slotName] then
+			itemId = itemSet[slot.slotName].selItemId
+		end
+		local item = itemId and itemId ~= 0 and itemsTab.items[itemId]
+		if item and item.base then
+			local mods = itemModLines(item)
+			local rarity = gameRarity[item.rarity] or item.rarity
+			local isUnique = rarity == "Unique"
+			table.insert(out, {
+				slot = slot.slotName,
+				label = slot.nodeId and "Jewel" or slot.label,
+				group = slotGroup(slot),
+				active = (slot.slotName:match("^Flask") and itemSet[slot.slotName] and itemSet[slot.slotName].active) or nil,
+				name = item.name,
+				title = item.title,
+				baseName = item.baseName,
+				rarity = rarity,
+				type = item.base.type,
+				itemLevel = item.itemLevel,
+				quality = item.quality,
+				corrupted = item.corrupted or nil,
+				mods = mods,
+				-- What GGG's in-game market search box accepts: names and base types only
+				searchText = (isUnique and item.title) or gameBaseName(item),
+				text = gameItemText(item, mods),
+			})
+		end
+	end
+	return {
+		build = buildInfo(),
+		itemSet = itemSet.title or "Default",
+		items = out,
+	}
 end
 
 function handlers.quit()
