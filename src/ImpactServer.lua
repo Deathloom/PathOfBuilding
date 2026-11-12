@@ -1064,14 +1064,48 @@ local function socketGroups(loadout)
 	return out
 end
 
+-- Socketable gear in the loadout's item set: slot, item name and sockets in the
+-- game's notation ("R-G-B W": "-" = linked). Weapon swap included.
+local function socketedItems(loadout)
+	useLoadout(loadout)
+	local itemsTab = build.itemsTab
+	local itemSet = itemsTab.activeItemSet
+	local out = { }
+	for _, slot in ipairs(itemsTab.orderedSlots) do
+		if not slot.nodeId and not slot.slotName:match("^Flask") and itemSet[slot.slotName] then
+			local itemId = itemSet[slot.slotName].selItemId
+			local item = itemId and itemId ~= 0 and itemsTab.items[itemId]
+			if item and item.base and item.sockets and #item.sockets > 0 then
+				local parts = { }
+				for i, socket in ipairs(item.sockets) do
+					parts[#parts + 1] = socket.color
+					local nextSocket = item.sockets[i + 1]
+					if nextSocket then
+						parts[#parts + 1] = (nextSocket.group == socket.group) and "-" or " "
+					end
+				end
+				table.insert(out, {
+					slot = slot.slotName,
+					name = (item.title and item.title ~= "" and item.title) or item.name or item.baseName,
+					baseName = item.baseName,
+					sockets = table.concat(parts),
+				})
+			end
+		end
+	end
+	return out
+end
+
 function handlers.gems()
 	if not loaded then
 		error("No build loaded")
 	end
 	local reply = { build = buildInfo() }
 	reply.groups = socketGroups(buildLoadout)
+	reply.items = socketedItems(buildLoadout)
 	if liveLoadout and liveInfo and liveInfo.skills then
 		reply.live = socketGroups(liveLoadout)
+		reply.liveItems = socketedItems(liveLoadout)
 		reply.character = liveInfo.character
 	end
 	useLoadout(buildLoadout)
