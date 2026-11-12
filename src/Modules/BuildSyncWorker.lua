@@ -1,10 +1,11 @@
 -- Path of Building (Deathloom fork)
+-- cspell:ignore Deathloom rerr werr organisation
 --
 -- Module: Build Sync Worker
 -- Runs in a background sub-script (LaunchSubScript). Does only the GitHub HTTP calls and file writes;
 -- all decisions are made on the main thread by Modules/BuildSync.lua + Modules/BuildSyncCore.lua.
 --
--- Args: mode ("tree" | "apply"), payloadJson, connectionProtocol, proxyURL, noSSL
+-- Args: mode ("tree" | "apply" | "deviceCode" | "devicePoll" | "refresh" | "whoami"), payloadJson, connectionProtocol, proxyURL, noSSL
 -- Returns: resultJson, errMsg
 --
 local mode, payloadJson, connectionProtocol, proxyURL, noSSL = ...
@@ -14,7 +15,7 @@ local dkjson = require("dkjson")
 local base64 = require("base64")
 
 local p = dkjson.decode(payloadJson)
-local api = "https://api.github.com/repos/"..p.owner.."/"..p.repo
+local api = "https://api.github.com/repos/"..tostring(p.owner).."/"..tostring(p.repo)
 
 local function encodePath(path)
 	return (path:gsub("[^%w%-%._~/]", function(c)
@@ -22,16 +23,21 @@ local function encodePath(path)
 	end))
 end
 
-local function request(method, url, accept, body)
+-- opts.form: body is x-www-form-urlencoded and no token is sent (github.com OAuth endpoints)
+local function request(method, url, accept, body, opts)
+	opts = opts or { }
 	local easy = curl.easy()
 	local responseBody = { }
 	easy:setopt_url(url)
-	easy:setopt(curl.OPT_HTTPHEADER, {
-		"Authorization: Bearer "..p.token,
+	local headers = {
 		"Accept: "..(accept or "application/vnd.github+json"),
-		"X-GitHub-Api-Version: 2022-11-28",
-		"Content-Type: application/json",
-	})
+		"Content-Type: "..(opts.form and "application/x-www-form-urlencoded" or "application/json"),
+	}
+	if not opts.form then
+		table.insert(headers, "Authorization: Bearer "..tostring(p.token))
+		table.insert(headers, "X-GitHub-Api-Version: 2022-11-28")
+	end
+	easy:setopt(curl.OPT_HTTPHEADER, headers)
 	easy:setopt(curl.OPT_USERAGENT, p.userAgent or "Path of Building fork")
 	easy:setopt(curl.OPT_ACCEPT_ENCODING, "")
 	easy:setopt(curl.OPT_FOLLOWLOCATION, 1)
@@ -113,7 +119,36 @@ local function readFile(fullPath)
 	return content
 end
 
-if mode == "tree" then
+-- github.com OAuth endpoints answer 200 with { error = ... } for most failures
+local function oauthPost(url, body)
+	local text, err, code = request("POST", url, "application/json", body, { form = true })
+	if not text then
+		return nil, err
+	end
+	local decoded = dkjson.decode(text)
+	if type(decoded) ~= "table" then
+		return nil, "Unexpected reply from GitHub (HTTP "..tostring(code)..")"
+	end
+	return dkjson.encode(decoded), nil
+end
+
+if mode == "deviceCode" or mode == "devicePoll" or mode == "refresh" then
+	return oauthPost(p.url, p.body)
+
+elseif mode == "whoami" then
+	-- Who is signed in, and can they see the builds repo?
+	local result = { }
+	local text, err, code = request("GET", "https://api.github.com/user")
+	if not text then
+		return nil, err
+	end
+	local user = dkjson.decode(text)
+	result.login = type(user) == "table" and user.login or nil
+	local _, _, repoCode = request("GET", api)
+	result.repoCode = repoCode
+	return dkjson.encode(result), nil
+
+elseif mode == "tree" then
 	local text, err = request("GET", api.."/git/trees/"..encodePath(p.branch).."?recursive=1")
 	if not text then
 		if err and err:match("^HTTP 409") then

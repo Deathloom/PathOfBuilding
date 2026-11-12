@@ -101,7 +101,15 @@ function listMode:Init(selBuildName, subPath)
 		buildSync:OpenSettingsPopup()
 	end)
 	self.controls.syncSettings.enabled = function() return not buildSync.busy end
-	self.controls.syncSettings.tooltipText = "GitHub repo, your player folder and access token for Push/Pull."
+	self.controls.syncSettings.tooltipText = "Sign in with GitHub, auto sync, your player folder and the builds repo."
+	self.controls.syncNow = new("ButtonControl"):ButtonControl({"LEFT",self.controls.syncSettings,"RIGHT"}, {8, 0, 75, 20}, "Sync now", function()
+		buildSync:SyncNow(refreshAfterSync)
+	end)
+	self.controls.syncNow.enabled = function() return not buildSync.busy end
+	self.controls.syncNow.tooltipText = "Pull everyone's builds, then push your own folder."
+	self.controls.syncStatus = new("LabelControl"):LabelControl({"LEFT",self.controls.syncNow,"RIGHT"}, {8, 2, 0, 14}, function()
+		return buildSync:StatusText()
+	end)
 	self.controls.buildList = new("BuildListControl"):BuildListControl({"TOP",self.anchor,"TOP"}, {0, 75, 900, 0}, self)
 	self.controls.buildList.height = function()
 		return main.screenH - 80

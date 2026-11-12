@@ -407,6 +407,7 @@ function main:OnFrame()
 	end
 
 	self:CallMode("OnFrame", self.inputEvents, self.viewPort)
+	require("Modules.BuildSync"):OnFrame() -- fork: GitHub sign-in polling + auto sync
 
 	if launch.updateErrMsg then
 		ToastNotification:Add(string.format("Update check failed!\n%s", launch.updateErrMsg))
