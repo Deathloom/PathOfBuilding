@@ -1064,8 +1064,8 @@ local function socketGroups(loadout)
 	return out
 end
 
--- Socketable gear in the loadout's item set: slot, item name and sockets in the
--- game's notation ("R-G-B W": "-" = linked). Weapon swap included.
+-- Gear in the loadout's item set (no flasks or jewels): slot, item name and sockets
+-- in the game's notation ("R-G-B W": "-" = linked; "" = no sockets). Weapon swap included.
 local function socketedItems(loadout)
 	useLoadout(loadout)
 	local itemsTab = build.itemsTab
@@ -1075,11 +1075,12 @@ local function socketedItems(loadout)
 		if not slot.nodeId and not slot.slotName:match("^Flask") and itemSet[slot.slotName] then
 			local itemId = itemSet[slot.slotName].selItemId
 			local item = itemId and itemId ~= 0 and itemsTab.items[itemId]
-			if item and item.base and item.sockets and #item.sockets > 0 then
+			if item and item.base then
 				local parts = { }
-				for i, socket in ipairs(item.sockets) do
+				local sockets = item.sockets or { }
+				for i, socket in ipairs(sockets) do
 					parts[#parts + 1] = socket.color
-					local nextSocket = item.sockets[i + 1]
+					local nextSocket = sockets[i + 1]
 					if nextSocket then
 						parts[#parts + 1] = (nextSocket.group == socket.group) and "-" or " "
 					end
