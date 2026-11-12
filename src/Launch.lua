@@ -61,6 +61,17 @@ function launch:OnInit()
 		-- Enable dev mode to disable updates and set user path to be the script path
 		self.devMode = true
 	end
+	-- Deathloom fork: bundled inside Loot Goblin (bundled.cfg next to Launch.lua).
+	-- PoB updates arrive with Loot Goblin releases, so PoB's own updater is off;
+	-- settings and builds live in Documents\Loot Goblin (not the install folder,
+	-- which updates and uninstalls replace).
+	local bundledFile = io.open(GetScriptPath().."/bundled.cfg", "r")
+	if bundledFile then
+		bundledFile:close()
+		self.bundledMode = true
+		self.devMode = false
+		self.versionBranch = "loot-goblin"
+	end
 	local installedFile = io.open("installed.cfg", "r")
 	if installedFile then
 		self.installedMode = true
@@ -337,7 +348,7 @@ function launch:ApplyUpdate(mode)
 end
 
 function launch:CheckForUpdate(inBackground)
-	if self.updateCheckRunning then
+	if self.updateCheckRunning or self.bundledMode then
 		return
 	end
 	self.updateCheckBackground = inBackground
