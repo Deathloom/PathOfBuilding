@@ -20,7 +20,10 @@
 --   {"id":5,"cmd":"equipped","items":[...],"passives":{...},"skills":true,"character":{...}}
 --   {"id":6,"cmd":"clearEquipped"}
 --   {"id":7,"cmd":"gear"}       (the build's items: slot, mods, game-format text)
---   {"id":8,"cmd":"quit"}
+--   {"id":8,"cmd":"loadouts"}   (trees, item sets, skill sets, PoB's named loadouts)
+--   {"id":9,"cmd":"setLoadout","named":"..."} or {...,"spec":n,"itemSet":n,"skillSet":n}
+--   {"id":10,"cmd":"gems"}      (socket groups of the build and the live character)
+--   {"id":11,"cmd":"quit"}
 --
 -- Replies: {"id":n,"ok":true,...} or {"id":n,"ok":false,"error":"..."}
 --
@@ -886,6 +889,192 @@ function handlers.gear()
 		itemSet = itemSet.title or "Default",
 		items = out,
 	}
+end
+
+-- Loadouts: which tree / item set / skill set of the build the overlay
+-- compares against. PoB's named loadouts (the dropdown at the top of the PoB
+-- window) are offered too. The live character's hidden sets are never listed.
+
+local noSync = function() end
+
+-- PoB's own loadout list, computed the same way as its dropdown
+local function namedLoadouts()
+	local names = { }
+	local control = build.controls and build.controls.buildLoadouts
+	if not control then
+		return names
+	end
+	build.SyncLoadouts = origSyncLoadouts
+	local ok, err = pcall(origSyncLoadouts, build)
+	build.SyncLoadouts = noSync
+	if not ok then
+		logErr("SyncLoadouts failed: " .. tostring(err))
+		return names
+	end
+	for _, value in ipairs(control.list or { }) do
+		-- PoB marks its own menu entries (New Loadout, Sync, ...) with ^7^7
+		if type(value) == "string" and not value:match("^%^7%^7") and value ~= "Live character" then
+			table.insert(names, value)
+		end
+	end
+	return names
+end
+
+local function loadoutInfo()
+	local treeTab, itemsTab, skillsTab = build.treeTab, build.itemsTab, build.skillsTab
+	local live = liveLoadout or { }
+	local trees, itemSets, skillSets = { }, { }, { }
+	for index, spec in ipairs(treeTab.specList) do
+		if index ~= live.spec or index == buildLoadout.spec then
+			table.insert(trees, { id = index, title = spec.title or "Default" })
+		end
+	end
+	for _, id in ipairs(itemsTab.itemSetOrderList) do
+		if itemsTab.itemSets[id] and (id ~= live.itemSet or id == buildLoadout.itemSet) then
+			table.insert(itemSets, { id = id, title = itemsTab.itemSets[id].title or "Default" })
+		end
+	end
+	for _, id in ipairs(skillsTab.skillSetOrderList) do
+		if skillsTab.skillSets[id] and (id ~= live.skillSet or id == buildLoadout.skillSet) then
+			table.insert(skillSets, { id = id, title = skillsTab.skillSets[id].title or "Default" })
+		end
+	end
+	local named = namedLoadouts()
+	-- The named loadout that matches the active sets (PoB names loadouts after the tree)
+	local treeTitle = treeTab.specList[buildLoadout.spec] and treeTab.specList[buildLoadout.spec].title or "Default"
+	local activeNamed
+	for _, name in ipairs(named) do
+		if name == treeTitle or (name:match("%{(%w+)%}") and treeTitle:find("{" .. name:match("%{(%w+)%}"), 1, true)) then
+			activeNamed = name
+			break
+		end
+	end
+	return {
+		trees = trees,
+		itemSets = itemSets,
+		skillSets = skillSets,
+		named = named,
+		active = {
+			spec = buildLoadout.spec,
+			itemSet = buildLoadout.itemSet,
+			skillSet = buildLoadout.skillSet,
+			named = activeNamed,
+		},
+	}
+end
+
+function handlers.loadouts()
+	if not loaded then
+		error("No build loaded")
+	end
+	useLoadout(buildLoadout)
+	return { loadouts = loadoutInfo(), build = buildInfo() }
+end
+
+-- {"cmd":"setLoadout","named":"Mapping"} or {"cmd":"setLoadout","spec":2,"itemSet":3,"skillSet":1}
+-- Only for this PoB process: the build file is never written. Drops the live
+-- character's loadout (its sets were made next to the old ones), so send
+-- "equipped" again afterwards.
+function handlers.setLoadout(req)
+	if not loaded then
+		error("No build loaded")
+	end
+	clearLive()
+	useLoadout(buildLoadout)
+	local treeTab, itemsTab, skillsTab = build.treeTab, build.itemsTab, build.skillsTab
+	if type(req.named) == "string" and req.named ~= "" then
+		local found = false
+		for _, name in ipairs(namedLoadouts()) do
+			if name == req.named then
+				found = true
+			end
+		end
+		if not found then
+			error("Loadout not found in this build: " .. req.named)
+		end
+		local ok, err = pcall(build.controls.buildLoadouts.selFunc, 1, req.named)
+		build.SyncLoadouts = noSync
+		if not ok then
+			error(err, 0)
+		end
+	else
+		local spec, itemSet, skillSet = tonumber(req.spec), tonumber(req.itemSet), tonumber(req.skillSet)
+		if spec and treeTab.specList[spec] and spec ~= treeTab.activeSpec then
+			treeTab:SetActiveSpec(spec)
+		end
+		if itemSet and itemsTab.itemSets[itemSet] and itemSet ~= itemsTab.activeItemSetId then
+			itemsTab:SetActiveItemSet(itemSet)
+		end
+		if skillSet and skillsTab.skillSets[skillSet] and skillSet ~= skillsTab.activeSkillSetId then
+			skillsTab:SetActiveSkillSet(skillSet)
+		end
+	end
+	build.SyncLoadouts = noSync
+	recalc()
+	if build.mainSocketGroup > #skillsTab.socketGroupList then
+		build.mainSocketGroup = build.importTab:GuessMainSocketGroup()
+		recalc()
+	end
+	buildLoadout = captureLoadout()
+	activeLoadout = buildLoadout
+	local info = buildInfo()
+	buildMainSkill = info.mainSkill
+	return { loadouts = loadoutInfo(), build = info }
+end
+
+-- Gems menu: the build's socket groups (gems, levels, quality) and, when the
+-- live character was sent with skills, the character's socket groups too.
+-- Comparing them is left to the overlay.
+local function socketGroups(loadout)
+	useLoadout(loadout)
+	local out = { }
+	for index, group in ipairs(build.skillsTab.socketGroupList) do
+		local gems = { }
+		for _, gem in ipairs(group.gemList or { }) do
+			local data = gem.gemData
+			local name = (data and data.name) or gem.nameSpec
+			if name and name ~= "" then
+				local effect = gem.grantedEffect or (data and data.grantedEffect)
+				table.insert(gems, {
+					name = name,
+					level = gem.level,
+					quality = gem.quality,
+					enabled = gem.enabled ~= false,
+					support = (effect and effect.support) and true or false,
+					-- Gem tag colour: str / dex / int
+					colour = data and data.grantedEffect and data.grantedEffect.color or nil,
+				})
+			end
+		end
+		if #gems > 0 then
+			table.insert(out, {
+				index = index,
+				label = (group.label and group.label:match("%S")) and group.label or nil,
+				slot = group.slot,
+				-- Skills granted by items (e.g. a unique's skill) can't be socketed
+				source = group.source,
+				enabled = group.enabled ~= false,
+				main = index == build.mainSocketGroup or nil,
+				fullDPS = group.includeInFullDPS or nil,
+				gems = gems,
+			})
+		end
+	end
+	return out
+end
+
+function handlers.gems()
+	if not loaded then
+		error("No build loaded")
+	end
+	local reply = { build = buildInfo() }
+	reply.groups = socketGroups(buildLoadout)
+	if liveLoadout and liveInfo and liveInfo.skills then
+		reply.live = socketGroups(liveLoadout)
+		reply.character = liveInfo.character
+	end
+	useLoadout(buildLoadout)
+	return reply
 end
 
 function handlers.quit()

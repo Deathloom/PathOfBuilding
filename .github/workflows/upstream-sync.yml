@@ -1,0 +1,73 @@
+# Deathloom fork: weekly check for a new Path of Building Community release.
+# Opens a PR in THIS fork that merges the release into dev. It never pushes
+# to or opens anything on the original project (PathOfBuildingCommunity/PathOfBuilding).
+#
+# One-time setup on GitHub (fork repos start with Actions off):
+#   Actions tab -> enable workflows
+#   Settings -> Actions -> General -> Workflow permissions:
+#     "Read and write" + "Allow GitHub Actions to create and approve pull requests"
+name: Upstream release check
+
+on:
+  schedule:
+    - cron: '23 3 * * 2'  # Tuesdays 03:23 UTC (05:23 SAST)
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: upstream-sync
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    env:
+      UPSTREAM: PathOfBuildingCommunity/PathOfBuilding
+      BASE: dev
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.BASE }}
+          fetch-depth: 0
+
+      - name: Merge the latest upstream release into a PR branch
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream "https://github.com/$UPSTREAM.git"
+          # fetch only: this job never pushes to upstream
+          git remote set-url --push upstream DISABLED
+          git fetch upstream --tags --force --quiet
+
+          TAG=$(gh release view --repo "$UPSTREAM" --json tagName -q .tagName)
+          echo "Latest upstream release: $TAG"
+          if git merge-base --is-ancestor "$TAG" HEAD; then
+            echo "Already merged into $BASE."
+            exit 0
+          fi
+          BRANCH="upstream/$TAG"
+          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null; then
+            echo "Branch $BRANCH already exists (PR open or handled)."
+            exit 0
+          fi
+
+          git checkout -b "$BRANCH"
+          if git merge --no-edit -m "Merge upstream $TAG" "$TAG"; then
+            STATE="merges cleanly"
+          else
+            CONFLICTS=$(git diff --name-only --diff-filter=U | paste -sd, -)
+            git merge --abort
+            # Branch at the release itself; the PR shows the conflicts to resolve
+            git reset --hard "$TAG"
+            STATE="has conflicts in $CONFLICTS"
+          fi
+          git push origin "$BRANCH"
+
+          # --repo: a fork's default PR target is the parent project; never use that
+          gh pr create --repo "$GITHUB_REPOSITORY" --base "$BASE" --head "$BRANCH" \
+            --title "Upstream release $TAG" \
+            --body "Merges $UPSTREAM release $TAG into $BASE. The merge $STATE. Check the fork's own changes still work before merging."
