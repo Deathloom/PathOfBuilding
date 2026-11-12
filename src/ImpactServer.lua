@@ -24,6 +24,7 @@
 --   {"id":8,"cmd":"loadouts"}   (trees, item sets, skill sets, PoB's named loadouts)
 --   {"id":9,"cmd":"setLoadout","named":"..."} or {...,"spec":n,"itemSet":n,"skillSet":n}
 --   {"id":10,"cmd":"gems"}      (socket groups of the build and the live character)
+--   {"id":12,"cmd":"tree"}      (keystones / notables / masteries / ascendancy of build and character)
 --   {"id":11,"cmd":"quit"}
 --
 -- Replies: {"id":n,"ok":true,...} or {"id":n,"ok":false,"error":"..."}
@@ -1095,6 +1096,68 @@ local function socketedItems(loadout)
 		end
 	end
 	return out
+end
+
+-- Tree tab: the nodes that matter in the loadout's passive tree. Small passives
+-- are only counted. Masteries carry the chosen effect.
+local treeOrder = { Keystone = 1, Ascendancy = 2, Notable = 3, Mastery = 4, Socket = 5 }
+local function treeSummary(loadout)
+	useLoadout(loadout)
+	local spec = build.spec
+	local used, ascUsed = spec:CountAllocNodes()
+	local nodes = { }
+	for id, node in pairs(spec.allocNodes) do
+		local t = node.type
+		local kind
+		if node.ascendancyName then
+			kind = (t == "Notable") and "Ascendancy" or nil
+		elseif t == "Keystone" or t == "Notable" or t == "Mastery" or t == "Socket" then
+			kind = t
+		end
+		if kind then
+			local entry = { id = id, name = node.dn, type = kind }
+			if t == "Mastery" then
+				local effectId = spec.masterySelections and spec.masterySelections[id]
+				local effect = effectId and spec.tree.masteryEffects and spec.tree.masteryEffects[effectId]
+				if effect and effect.sd then
+					entry.effect = table.concat(effect.sd, " / ")
+				end
+			end
+			-- Cluster jewel notables live on generated nodes
+			if node.expansionJewel or (type(id) == "number" and id >= 65536) then
+				entry.cluster = true
+			end
+			table.insert(nodes, entry)
+		end
+	end
+	table.sort(nodes, function(a, b)
+		if a.type ~= b.type then
+			return (treeOrder[a.type] or 9) < (treeOrder[b.type] or 9)
+		end
+		return tostring(a.name) < tostring(b.name)
+	end)
+	return {
+		points = used,
+		ascendancyPoints = ascUsed,
+		className = spec.curClassName,
+		ascendancy = spec.curAscendClassName ~= "None" and spec.curAscendClassName or nil,
+		nodes = nodes,
+	}
+end
+
+function handlers.tree()
+	if not loaded then
+		error("No build loaded")
+	end
+	local reply = { build = buildInfo() }
+	reply.tree = treeSummary(buildLoadout)
+	if liveLoadout and liveInfo and liveInfo.tree then
+		reply.live = treeSummary(liveLoadout)
+		reply.live.level = liveInfo.level
+		reply.character = liveInfo.character
+	end
+	useLoadout(buildLoadout)
+	return reply
 end
 
 function handlers.gems()
