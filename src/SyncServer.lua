@@ -169,7 +169,8 @@ common = { sha1 = require("sha1") }
 launch = { versionNumber = "?" }
 main = { popups = { } }
 do
-	local f = io.open("../manifest.xml", "rb")
+	-- Loot Goblin's copy keeps it in src, a git clone in the repo root
+	local f = io.open("manifest.xml", "rb") or io.open("../manifest.xml", "rb")
 	if f then
 		launch.versionNumber = f:read("*a"):match("<Version number=\"([^\"]+)\"") or "?"
 		f:close()

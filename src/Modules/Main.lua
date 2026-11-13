@@ -242,7 +242,7 @@ function main:Init()
 		launch:CheckForUpdate()
 	end)
 	self.controls.checkUpdate.shown = function()
-		return not launch.devMode and not launch.bundledMode and (not launch.updateAvailable or launch.updateAvailable == "none")
+		return not launch.devMode and (not launch.bundledMode or launch.bundledUpdates) and (not launch.updateAvailable or launch.updateAvailable == "none")
 	end
 	self.controls.checkUpdate.label = function()
 		return launch.updateCheckRunning and launch.updateProgress or "Check for Update"
