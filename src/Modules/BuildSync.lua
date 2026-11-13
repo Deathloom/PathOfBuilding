@@ -176,6 +176,13 @@ function sync:EnsureToken(callback)
 			end
 			local fresh, err = auth.sessionFromToken(resp, os.time(), session.login)
 			if not fresh then
+				-- Refresh tokens are single-use: Loot Goblin's sync (or another PoB) may have renewed
+				-- the shared sign-in meanwhile. Use that instead of signing out.
+				local current = self:GetSession()
+				if current and current.refresh ~= session.refresh and auth.tokenStatus(current, os.time()) == "ok" then
+					callback(current.access)
+					return
+				end
 				self:SignOut()
 				fallback(err.." (Sync...)")
 				return
@@ -232,12 +239,20 @@ function sync:Load()
 	end
 end
 
+-- Loot Goblin's sync (SyncServer.lua) shares BuildSync.json: re-read it before each Pull/Push
+-- so neither side works from (or saves back) stale sync state
+function sync:Reload()
+	self.loaded = false
+	self:Load()
+end
+
 function sync:Save()
 	local f = io.open(self:SettingsFile(), "wb")
 	if not f then
 		return
 	end
-	f:write(dkjson.encode({ settings = self.settings, prefs = self.prefs, state = self.stateByKey }, { indent = true }))
+	-- buildPath: PoB's build save path, so Loot Goblin's sync (SyncServer.lua) uses the same folder
+	f:write(dkjson.encode({ settings = self.settings, prefs = self.prefs, state = self.stateByKey, buildPath = main.buildPath }, { indent = true }))
 	f:close()
 end
 
@@ -246,8 +261,23 @@ function sync:StateKey()
 	return s.owner.."/"..s.repo.."@"..s.branch..":"..core.normaliseRoot(s.root).."|"..main.buildPath
 end
 
+-- Same folder written differently (slashes, case, trailing slash) is the same sync state
+local function normKey(key)
+	return (key:gsub("\\", "/"):gsub("/+", "/"):gsub("/$", ""):lower())
+end
+
 function sync:State()
 	local key = self:StateKey()
+	if not self.stateByKey[key] then
+		local want = normKey(key)
+		for k, v in pairs(self.stateByKey) do
+			if normKey(k) == want then
+				self.stateByKey[k] = nil
+				self.stateByKey[key] = v
+				break
+			end
+		end
+	end
 	self.stateByKey[key] = self.stateByKey[key] or { }
 	return self.stateByKey[key]
 end
@@ -382,7 +412,7 @@ function sync:Finish(title, lines, onDone, notable, ok)
 end
 
 function sync:CheckReady(forPush)
-	self:Load()
+	self:Reload()
 	local s = self.settings
 	if s.owner == "" or s.repo == "" or s.branch == "" then
 		return "Set the GitHub repo first (Sync settings)."
