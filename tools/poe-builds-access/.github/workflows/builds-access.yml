@@ -55,6 +55,14 @@ jobs:
               await say(`@${player}, @${requester} would like to see your builds. Comment \`/approve\` to share them (read only) or \`/deny\`.`)
               return
             }
+            if (context.payload.issue.state !== 'open') {
+              core.notice('request is closed; ignored')
+              return
+            }
+            if (requester.toLowerCase() === player.toLowerCase()) {
+              core.notice('request for your own builds; ignored')
+              return
+            }
             const commenter = context.payload.comment.user.login
             if (commenter.toLowerCase() !== player.toLowerCase()) {
               core.notice(`${commenter} doesn't own ${repo}; ignored`)

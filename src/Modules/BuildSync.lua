@@ -441,6 +441,12 @@ function sync:CheckReady(forPush)
 	if forPush and not core.validPlayer(s.player) then
 		return "Set your player folder name first (Sync settings)."
 	end
+	-- Per-player repos are named after the GitHub account (builds-<login>), and Pull takes only
+	-- poe1/<login>/ from it, so your folder has to be your GitHub name
+	local login = self:GetSession() and self:GetSession().login
+	if forPush and self:PerPlayer() and login and login:lower() ~= s.player:lower() then
+		return "With per-player repos your player folder must be your GitHub name ("..login.."). Change it in Sync settings."
+	end
 end
 
 local function listLines(lines, header, items, max)

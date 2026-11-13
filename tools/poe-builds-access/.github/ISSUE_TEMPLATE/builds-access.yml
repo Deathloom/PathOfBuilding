@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        The player gets a notification. When they comment `/approve`, you can read their builds and they appear on your next Pull. They can take it back at any time.
+        The player gets a notification. When they comment `/approve`, you can read their builds and they appear on your next Pull. They can take it back at any time (their repo → Settings → Collaborators, or ask the group owner).
   - type: input
     id: player
     attributes:

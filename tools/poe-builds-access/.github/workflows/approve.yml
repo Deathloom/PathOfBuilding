@@ -49,11 +49,16 @@ jobs:
               const admin = getOctokit(process.env.ADMIN_TOKEN).rest
               const repo = `builds-${user.login}`
               try {
-                await admin.repos.get({ owner: org, repo }).catch(() =>
-                  admin.repos.createInOrg({ org, name: repo, private: true, auto_init: true,
-                    description: `${user.login}'s builds (Loot Goblin / PoB sync)` }))
-                await admin.repos.addCollaborator({ owner: org, repo, username: user.login, permission: 'push' })
-                lines.push(`Your builds repo: ${org}/${repo}. Nobody else sees your builds until you approve their request.`)
+                const exists = await admin.repos.get({ owner: org, repo }).then(() => true, () => false)
+                if (exists) {
+                  // Never hand an existing repo (someone's migrated builds) to a new account by name alone
+                  lines.push(`${org}/${repo} already exists, so it wasn't given to @${user.login}. Owner: check whose builds it holds and add them by hand.`)
+                } else {
+                  await admin.repos.createInOrg({ org, name: repo, private: true, auto_init: true,
+                    description: `${user.login}'s builds (Loot Goblin / PoB sync)` })
+                  await admin.repos.addCollaborator({ owner: org, repo, username: user.login, permission: 'push' })
+                  lines.push(`Your builds repo: ${org}/${repo}. Nobody else sees your builds until you approve their request.`)
+                }
               } catch (e) {
                 lines.push(`Couldn't create your builds repo: ${e.message} (ask the group owner).`)
               }

@@ -62,8 +62,9 @@ describe("BuildSyncCore", function()
 			{ path = "poe1/Alicex/c.xml", sha = "c1" },
 			{ path = "README.md", sha = "r1" },
 		}
+		table.insert(entries, { path = "poe1/alice/lower.xml", sha = "l1" })
 		local only = core.playerEntries(entries, "poe1", "Alice")
-		assert.are.equals(1, #only)
+		assert.are.equals(2, #only)
 		assert.are.equals("poe1/Alice/a.xml", only[1].path)
 		local repos = core.playerRepos({ "builds-Zed", "poe-builds", "builds-Alice", "builds-", "builds-.git", "access", "BUILDS-Bob" }, "builds-")
 		assert.are.equals(3, #repos)

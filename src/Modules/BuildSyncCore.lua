@@ -198,10 +198,12 @@ end
 
 -- Per-player repos: only entries inside root/<player>/ (a player's repo may only fill that player's folder)
 function core.playerEntries(entries, root, player)
-	local prefix = core.toRemote(root, player.."/")
+	-- Case-insensitive like the Windows file system (and GitHub repo names): poe1/alice/ in builds-Alice
+	-- still lands in that same player's folder, never in anyone else's
+	local prefix = core.toRemote(root, player.."/"):lower()
 	local out = { }
 	for _, e in ipairs(entries) do
-		if type(e.path) == "string" and e.path:sub(1, #prefix) == prefix then
+		if type(e.path) == "string" and e.path:sub(1, #prefix):lower() == prefix then
 			table.insert(out, e)
 		end
 	end
