@@ -936,6 +936,11 @@ function sync:OpenSettingsPopup()
 			s[field.key] = controls[field.key].buf:gsub("^%s+", ""):gsub("%s+$", "")
 		end
 		s.root = core.normaliseRoot(s.root)
+		if not core.validRepoName(s.owner) or not core.validRepoName(s.repo) or not core.validBranch(s.branch)
+			or (s.root ~= "" and not core.validBranch(s.root)) then
+			main:OpenMessagePopup("Sync settings", "Owner, repo, branch and folder can only use letters, numbers, _ - . (and / in branch and folder).")
+			return
+		end
 		if s.player ~= "" and not core.validPlayer(s.player) then
 			main:OpenMessagePopup("Sync settings", "Player folder can only use letters, numbers, _ - and .")
 			return
