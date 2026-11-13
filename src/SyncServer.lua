@@ -23,7 +23,10 @@
 --   {"id":4,"cmd":"signInPoll","deviceCode":"..."}   -> state: pending | slow_down | done | error
 --   {"id":5,"cmd":"signOut"}
 --   {"id":6,"cmd":"pull"} / {"cmd":"push"} / {"cmd":"syncNow"} -> success, lines (+ status)
---   {"id":7,"cmd":"quit"}
+--   {"id":7,"cmd":"report","key":"...","title":"...","body":"...","seen":"..."}
+--       Problem report as a GitHub issue in the builds repo (label auto-report), with the
+--       user's own sign-in. Same key already open -> a comment ("seen") instead of a new issue.
+--   {"id":8,"cmd":"quit"}
 
 local realStdout = io.stdout
 local function logErr(...)
@@ -432,6 +435,43 @@ end
 
 function handlers.syncNow()
 	return runOps({ "Pull", "Push" })
+end
+
+function handlers.report(req)
+	local s = setup()
+	if type(req.key) ~= "string" or not req.key:match("^[%w%-]+$") or type(req.title) ~= "string" or type(req.body) ~= "string" then
+		error("report needs key, title and body", 0)
+	end
+	if not s:HasAuth() then
+		return { sent = false, reason = "Not signed in to GitHub" }
+	end
+	local token, tokenErr
+	s:EnsureToken(function(t, e) token, tokenErr = t, e end)
+	if not token then
+		return { sent = false, reason = tokenErr }
+	end
+	local repoPath = "/repos/"..s.core.encodePath(s.settings.owner).."/"..s.core.encodePath(s.settings.repo)
+	local function api(method, path, body)
+		local out
+		s:LaunchWorker("api", { token = token, method = method, path = repoPath..path, body = body and dkjson.encode(body) }, function(res, err)
+			out = res or { code = 0, error = err }
+		end)
+		return out
+	end
+	local marker = "<!-- loot-goblin-report:"..req.key.." -->"
+	local list = api("GET", "/issues?state=open&labels=auto-report&per_page=100")
+	if list.code ~= 200 then
+		return { sent = false, reason = "GitHub HTTP "..tostring(list.code)..(list.error and (": "..list.error) or "") }
+	end
+	for _, issue in ipairs(type(list.body) == "table" and list.body or { }) do
+		if type(issue) == "table" and type(issue.body) == "string" and issue.body:find(marker, 1, true) then
+			local res = api("POST", "/issues/"..tostring(issue.number).."/comments", { body = tostring(req.seen or "Seen again.") })
+			return { sent = res.code == 201, issue = issue.number, comment = true, reason = res.code ~= 201 and ("GitHub HTTP "..tostring(res.code)) or nil }
+		end
+	end
+	local res = api("POST", "/issues", { title = req.title, body = req.body.."\n\n"..marker, labels = { "auto-report" } })
+	local number = type(res.body) == "table" and res.body.number or nil
+	return { sent = res.code == 201, issue = number, reason = res.code ~= 201 and ("GitHub HTTP "..tostring(res.code)..(res.error and (": "..res.error) or "")) or nil }
 end
 
 function handlers.quit()
