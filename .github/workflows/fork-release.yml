@@ -1,0 +1,67 @@
+# Deathloom fork: release Path of Building for Loot Goblin.
+# Loot Goblin downloads PoB from the master branch and PoB's own updater reads
+# master's manifest.xml, so a release = master set to dev + a fresh manifest.xml.
+# Run from the Actions tab: Release PoB (master) -> Run workflow.
+name: Release PoB (master)
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Branch to release'
+        required: true
+        default: 'dev'
+      version:
+        description: 'PoB version shown in the app (empty = keep the one in manifest.xml)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pob-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v6
+      with:
+        ref: ${{ inputs.ref }}
+        fetch-depth: 1
+    - uses: actions/setup-python@v6
+      with:
+        python-version: '3.12'
+    - name: Check the fork's Loot Goblin files are there
+      run: |
+        test -f runtime/PoBHeadless.exe
+        test -f src/ImpactServer.lua
+        test -f src/SyncServer.lua
+        grep -q bundledUpdates src/Launch.lua || { echo "This branch has no Loot Goblin self-update (PoB PR #19)"; exit 1; }
+    - name: Regenerate manifest.xml
+      run: |
+        V="${{ inputs.version }}"
+        if [ -n "$V" ]; then
+          [[ "$V" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Version must look like 2.67.2"; exit 1; }
+          python update_manifest.py --in-place --set-version "$V"
+        else
+          python update_manifest.py --in-place
+        fi
+        grep -q 'name="ImpactServer.lua"' manifest.xml
+        grep -q 'name="HeadlessWrapper.lua"' manifest.xml
+        grep -q 'name="PoBHeadless.exe"' manifest.xml
+        grep -q 'raw.githubusercontent.com/Deathloom/PathOfBuilding/{branch}/' manifest.xml
+        echo "Files in manifest: $(grep -c '<File ' manifest.xml)"
+    - name: Update master
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        SRC=$(git rev-parse --short HEAD)
+        git add manifest.xml
+        git commit --allow-empty -m "Release for Loot Goblin: manifest for ${{ inputs.ref }}@$SRC"
+        # master only mirrors the release (dev + manifest commit), so it's replaced each time
+        git push --force origin HEAD:refs/heads/master
+        VER=$(grep -o '<Version number="[^"]*"' manifest.xml | cut -d'"' -f2)
+        echo "### Released PoB $VER from ${{ inputs.ref }}@$SRC to master" >> "$GITHUB_STEP_SUMMARY"
