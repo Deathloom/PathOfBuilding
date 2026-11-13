@@ -58,7 +58,7 @@ function core.isCopy(rel)
 end
 
 -- Windows device names: "CON", "nul.xml", "COM1.txt" etc. open the device, not a file
-local reservedNames = { CON = true, PRN = true, AUX = true, NUL = true, CONIN = true, ["CONOUT"] = true }
+local reservedNames = { CON = true, PRN = true, AUX = true, NUL = true, ["CONIN$"] = true, ["CONOUT$"] = true }
 for i = 0, 9 do
 	reservedNames["COM"..i] = true
 	reservedNames["LPT"..i] = true
@@ -75,7 +75,9 @@ function core.isSafeSegment(part)
 	if part == "" or #part > 120 then
 		return false
 	end
-	if part:find("[%c\\:%*%?\"<>|]") then
+	-- Printable ASCII only: no control characters, no Unicode lookalikes or right-to-left tricks
+	-- (and Lua's io.open can't open non-ASCII names on Windows anyway)
+	if part:find("[^\32-\126]") or part:find("[\\:%*%?\"<>|]") then
 		return false
 	end
 	if part:sub(1, 1) == "." or part:match("[%. ]$") or part:match("^ ") then
