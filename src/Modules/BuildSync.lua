@@ -33,6 +33,10 @@ local sync = {
 		branch = "main",
 		root = "poe1",
 		player = "",
+		-- Per-player repos: when set (e.g. "builds-"), every player has a private repo <owner>/<prefix><player>.
+		-- Push goes to your own repo; Pull reads every <prefix>* repo you've been given access to, and only
+		-- that player's folder from it. Empty = one shared repo (owner/repo) as before.
+		repoPrefix = "",
 	},
 	stateByKey = { },
 }
@@ -256,9 +260,19 @@ function sync:Save()
 	f:close()
 end
 
-function sync:StateKey()
+function sync:StateKey(repo)
 	local s = self.settings
-	return s.owner.."/"..s.repo.."@"..s.branch..":"..core.normaliseRoot(s.root).."|"..main.buildPath
+	return s.owner.."/"..(repo or s.repo).."@"..s.branch..":"..core.normaliseRoot(s.root).."|"..main.buildPath
+end
+
+function sync:PerPlayer()
+	return self.settings.repoPrefix ~= ""
+end
+
+-- Your own repo: the shared one, or <prefix><player> with per-player repos
+function sync:OwnRepo()
+	local s = self.settings
+	return self:PerPlayer() and (s.repoPrefix..s.player) or s.repo
 end
 
 -- Same folder written differently (slashes, case, trailing slash) is the same sync state
@@ -266,8 +280,8 @@ local function normKey(key)
 	return (key:gsub("\\", "/"):gsub("/+", "/"):gsub("/$", ""):lower())
 end
 
-function sync:State()
-	local key = self:StateKey()
+function sync:State(repo)
+	local key = self:StateKey(repo)
 	if not self.stateByKey[key] then
 		local want = normKey(key)
 		for k, v in pairs(self.stateByKey) do
@@ -359,7 +373,8 @@ function sync:LaunchWorker(mode, payload, callback)
 		.."if not __ok then return nil, 'Sync worker error: '..tostring(__res) end\nreturn __res, __err\n"
 	f:close()
 	local s = self.settings
-	payload.owner, payload.repo, payload.branch = s.owner, s.repo, s.branch
+	payload.owner, payload.branch = s.owner, s.branch
+	payload.repo = payload.repo or s.repo
 	payload.buildPath = main.buildPath
 	payload.userAgent = "Path of Building fork/"..tostring(launch.versionNumber)
 	local id = LaunchSubScript(script, "MakeDir", "ConPrintf,BuildSyncProgress", mode, dkjson.encode(payload), launch.connectionProtocol, launch.proxyURL, launch.noSSL or false)
@@ -414,7 +429,7 @@ end
 function sync:CheckReady(forPush)
 	self:Reload()
 	local s = self.settings
-	if s.owner == "" or s.repo == "" or s.branch == "" then
+	if s.owner == "" or (s.repo == "" and s.repoPrefix == "") or s.branch == "" then
 		return "Set the GitHub repo first (Sync settings)."
 	end
 	if not cred.available then
@@ -445,6 +460,55 @@ end
 ---------------------------------------------------------------------------
 -- Pull
 ---------------------------------------------------------------------------
+-- Pull one repo. onlyPlayer: with per-player repos, only that player's folder is taken from it, so a
+-- player's repo can never write into someone else's folder. Calls done(result) with
+-- { pulled, copies, failed, upToDate, truncated, err }.
+function sync:PullRepo(repo, onlyPlayer, done)
+	local root = self.settings.root
+	self:RunWorker("tree", { repo = repo }, function(tree, errMsg)
+		if not tree then
+			done({ err = errMsg })
+			return
+		end
+		local entries = tree.entries
+		if onlyPlayer then
+			entries = core.playerEntries(entries, root, onlyPlayer)
+		end
+		local state = self:State(repo)
+		local plan = core.planPull(entries, localSha, state, root)
+		for path, sha in pairs(plan.newState) do
+			state[path] = sha
+		end
+		local result = { pulled = { }, copies = { }, failed = { }, upToDate = plan.upToDate, truncated = tree.truncated }
+		if #plan.downloads == 0 then
+			done(result)
+			return
+		end
+		local actions = { }
+		for _, d in ipairs(plan.downloads) do
+			t_insert(actions, { op = "download", sha = d.sha, target = d.target, remotePath = d.remotePath })
+		end
+		self.status = "Pulling "..repo.."..."
+		self:RunWorker("apply", { repo = repo, actions = actions }, function(res, applyErr)
+			if not res then
+				result.err = applyErr
+				done(result)
+				return
+			end
+			for _, r in ipairs(res.results) do
+				local d = plan.downloads[r.index]
+				if r.ok then
+					state[d.remotePath] = r.sha
+					t_insert(d.conflict and result.copies or result.pulled, d.conflict and d.target or d.rel)
+				else
+					t_insert(result.failed, d.rel..": "..tostring(r.err))
+				end
+			end
+			done(result)
+		end)
+	end)
+end
+
 function sync:Pull(onDone, out)
 	if self.busy then return end
 	local err = self:CheckReady(false)
@@ -453,51 +517,74 @@ function sync:Pull(onDone, out)
 		self:Finish("Pull builds", { err }, onDone, false, false)
 		return
 	end
-	local root = self.settings.root
 	self:Begin("Listing files on GitHub...", out)
-	self:RunWorker("tree", { }, function(tree, errMsg)
-		if not tree then
-			self:Finish("Pull builds", { "^1Pull failed:", "^7"..tostring(errMsg) }, onDone, true, false)
+	local function finishAll(results, listErr)
+		local pulled, copies, failed, upToDate, truncated, errors = { }, { }, { }, 0, false, { }
+		for _, r in ipairs(results) do
+			for _, x in ipairs(r.pulled or { }) do t_insert(pulled, x) end
+			for _, x in ipairs(r.copies or { }) do t_insert(copies, x) end
+			for _, x in ipairs(r.failed or { }) do t_insert(failed, x) end
+			upToDate = upToDate + (r.upToDate or 0)
+			truncated = truncated or r.truncated
+			if r.err then
+				t_insert(errors, (r.repo and (r.repo..": ") or "")..tostring(r.err))
+			end
+		end
+		if listErr then
+			t_insert(errors, 1, listErr)
+		end
+		if #errors > 0 and #pulled == 0 and #copies == 0 and upToDate == 0 then
+			local lines = { "^1Pull failed:" }
+			for _, e in ipairs(errors) do t_insert(lines, "^7"..e) end
+			self:Finish("Pull builds", lines, onDone, true, false)
 			return
 		end
-		local state = self:State()
-		local plan = core.planPull(tree.entries, localSha, state, root)
-		for path, sha in pairs(plan.newState) do
-			state[path] = sha
-		end
-		if #plan.downloads == 0 then
-			self:Finish("Pull builds", { "Everything is up to date ("..plan.upToDate.." files)." }, onDone, false)
+		if #pulled == 0 and #copies == 0 and #failed == 0 and #errors == 0 then
+			self:Finish("Pull builds", { "Everything is up to date ("..upToDate.." files)." }, onDone, false)
 			return
 		end
-		local actions = { }
-		for _, d in ipairs(plan.downloads) do
-			t_insert(actions, { op = "download", sha = d.sha, target = d.target, remotePath = d.remotePath })
+		local lines = { string.format("Pulled %d, already up to date %d.", #pulled, upToDate) }
+		listLines(lines, "^7Updated:", pulled, 12)
+		listLines(lines, "^xFFAA00Changed both here and on GitHub - kept yours, saved theirs as a copy:", copies, 8)
+		listLines(lines, "^1Failed:", failed, 8)
+		listLines(lines, "^1Couldn't read:", errors, 6)
+		if truncated then
+			t_insert(lines, "^xFFAA00GitHub returned a truncated file list; some files may be missing.")
 		end
-		self.status = "Pulling..."
-		self:RunWorker("apply", { actions = actions }, function(res, errMsg)
-			if not res then
-				self:Finish("Pull builds", { "^1Pull failed:", "^7"..tostring(errMsg) }, onDone, true, false)
+		self:Finish("Pull builds", lines, onDone, true, #failed == 0 and #errors == 0)
+	end
+	if not self:PerPlayer() then
+		self:PullRepo(self.settings.repo, nil, function(r)
+			finishAll({ r })
+		end)
+		return
+	end
+	-- Per-player repos: every <prefix><player> repo this account can read
+	self:RunWorker("repos", { }, function(list, listErr)
+		if not list then
+			finishAll({ }, "Couldn't list the builds repos: "..tostring(listErr))
+			return
+		end
+		local repos = core.playerRepos(list.names, self.settings.repoPrefix)
+		local results = { }
+		local i = 0
+		local function nextRepo()
+			i = i + 1
+			local entry = repos[i]
+			if not entry then
+				if #repos == 0 then
+					t_insert(results, { err = "No builds repos visible yet. Ask a player for access to their builds." })
+				end
+				finishAll(results)
 				return
 			end
-			local pulled, copies, failed = { }, { }, { }
-			for _, r in ipairs(res.results) do
-				local d = plan.downloads[r.index]
-				if r.ok then
-					state[d.remotePath] = r.sha
-					t_insert(d.conflict and copies or pulled, d.conflict and d.target or d.rel)
-				else
-					t_insert(failed, d.rel..": "..tostring(r.err))
-				end
-			end
-			local lines = { string.format("Pulled %d, already up to date %d.", #pulled, plan.upToDate) }
-			listLines(lines, "^7Updated:", pulled, 12)
-			listLines(lines, "^xFFAA00Changed both here and on GitHub - kept yours, saved theirs as a copy:", copies, 8)
-			listLines(lines, "^1Failed:", failed, 8)
-			if tree.truncated then
-				t_insert(lines, "^xFFAA00GitHub returned a truncated file list; some files may be missing.")
-			end
-			self:Finish("Pull builds", lines, onDone, true, #failed == 0)
-		end)
+			self:PullRepo(entry.repo, entry.player, function(r)
+				r.repo = entry.repo
+				t_insert(results, r)
+				nextRepo()
+			end)
+		end
+		nextRepo()
 	end)
 end
 
@@ -513,10 +600,15 @@ function sync:Push(onDone, out)
 		return
 	end
 	local root, player = self.settings.root, self.settings.player
+	local repo = self:OwnRepo()
 	self:Begin("Listing files on GitHub...", out)
-	self:RunWorker("tree", { }, function(tree, errMsg)
+	self:RunWorker("tree", { repo = repo }, function(tree, errMsg)
 		if not tree then
-			self:Finish("Push builds", { "^1Push failed:", "^7"..tostring(errMsg) }, onDone, true, false)
+			local lines = { "^1Push failed:", "^7"..tostring(errMsg) }
+			if self:PerPlayer() and tostring(errMsg):match("^HTTP 404") then
+				t_insert(lines, "^7Your builds repo "..self.settings.owner.."/"..repo.." doesn't exist yet (or the app isn't installed on it). Ask the group owner to create it.")
+			end
+			self:Finish("Push builds", lines, onDone, true, false)
 			return
 		end
 		local remoteMap = { }
@@ -524,7 +616,7 @@ function sync:Push(onDone, out)
 			remoteMap[e.path] = e.sha
 		end
 		local localFiles = scanFolder(player.."/")
-		local state = self:State()
+		local state = self:State(repo)
 		local plan = core.planPush(localFiles, remoteMap, state, root, player)
 		for path, sha in pairs(plan.newState) do
 			state[path] = sha
@@ -547,7 +639,7 @@ function sync:Push(onDone, out)
 			t_insert(actions, { op = "upload", rel = u.rel, remotePath = u.remotePath, remoteSha = u.remoteSha })
 		end
 		self.status = "Pushing..."
-		self:RunWorker("apply", { actions = actions }, function(res, errMsg)
+		self:RunWorker("apply", { repo = repo, actions = actions }, function(res, errMsg)
 			if not res then
 				self:Finish("Push builds", { "^1Push failed:", "^7"..tostring(errMsg) }, onDone, true, false)
 				return
@@ -913,6 +1005,7 @@ function sync:OpenSettingsPopup()
 		{ key = "repo",   label = "Repository:",         tip = "Name of the private builds repo." },
 		{ key = "branch", label = "Branch:",             tip = "Branch to sync with (usually main)." },
 		{ key = "root",   label = "Folder in repo:",     tip = "Repo folder that maps to your build save path (poe1 for PoE1)." },
+		{ key = "repoPrefix", label = "Per-player repos:", tip = "Leave empty for one shared repo (Repository above).\nSet a prefix (e.g. builds-) when every player has a private repo <owner>/<prefix><player>:\nPush goes to your own repo, Pull reads every player's repo you've been given access to." },
 	}
 	for _, field in ipairs(fields) do
 		controls[field.key] = new("EditControl"):EditControl(nil, {70, y, 300, 20}, s[field.key], nil, "%c\\:%*%?\"<>|", 100)
@@ -937,7 +1030,8 @@ function sync:OpenSettingsPopup()
 		end
 		s.root = core.normaliseRoot(s.root)
 		if not core.validRepoName(s.owner) or not core.validRepoName(s.repo) or not core.validBranch(s.branch)
-			or (s.root ~= "" and not core.validBranch(s.root)) then
+			or (s.root ~= "" and not core.validBranch(s.root))
+			or (s.repoPrefix ~= "" and not core.validRepoName(s.repoPrefix)) then
 			main:OpenMessagePopup("Sync settings", "Owner, repo, branch and folder can only use letters, numbers, _ - . (and / in branch and folder).")
 			return
 		end

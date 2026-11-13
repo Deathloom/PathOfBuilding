@@ -6,6 +6,9 @@ Changes in this fork compared with [Path of Building Community](https://github.c
 
 ## [Unreleased]
 
+### Added
+- **Per-player builds repos** (opt-in): Sync... → *Per-player repos* = `builds-`. Push goes to your own private repo `<owner>/builds-<player>`; Pull reads every `builds-*` repo you've been given access to, and from each only that player's folder (a repo can't write into anyone else's folder). Empty = one shared repo, as before. SyncServer `configure` takes `repoPrefix`. Set-up for the POE-Builds org (access-request form, `/approve` workflow that grants read access, own repo created on join, migration workflow) in `tools/poe-builds-access/`.
+
 ### Security
 - **Build sync: safe file names only** (security review part 3): Pull now refuses repo paths that could leave the builds folder or misbehave on Windows (backslashes, `:`, `..`, device names like `CON`/`NUL`, trailing dots/spaces, control characters), anything other than `.xml`/`.txt`, paths deeper than 6 folders and files over 10 MB. The worker re-checks the file name and blob sha before writing. Requests are https-only (also after redirects, max 3), downloads are capped at 10 MB, and PoB's "skip SSL check" option is no longer applied to requests that carry the GitHub sign-in. Owner / repo / branch typed in Sync... are validated before they go into API URLs. The build-impact server refuses build files over 32 MB (friends' builds are other people's data).
 

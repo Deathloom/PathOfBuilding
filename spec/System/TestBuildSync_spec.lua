@@ -52,6 +52,24 @@ describe("BuildSyncCore", function()
 		assert.are.equals("F/ok.xml", plan.downloads[1].rel)
 	end)
 
+	it("per-player repos: only that player's folder, only valid repo names", function()
+		local entries = {
+			{ path = "poe1/Alice/a.xml", sha = "a1" },
+			{ path = "poe1/Bob/sneaky.xml", sha = "b1" },
+			{ path = "poe1/Alicex/c.xml", sha = "c1" },
+			{ path = "README.md", sha = "r1" },
+		}
+		local only = core.playerEntries(entries, "poe1", "Alice")
+		assert.are.equals(1, #only)
+		assert.are.equals("poe1/Alice/a.xml", only[1].path)
+		local repos = core.playerRepos({ "builds-Zed", "poe-builds", "builds-Alice", "builds-", "builds-.git", "access", "BUILDS-Bob" }, "builds-")
+		assert.are.equals(3, #repos)
+		assert.are.equals("builds-Alice", repos[1].repo)
+		assert.are.equals("Alice", repos[1].player)
+		assert.are.equals("BUILDS-Bob", repos[2].repo)
+		assert.are.equals("builds-Zed", repos[3].repo)
+	end)
+
 	it("validates repo settings", function()
 		assert.is_true(core.validRepoName("POE-Builds"))
 		assert.is_false(core.validRepoName("x/y"))

@@ -1,0 +1,65 @@
+# Owner comments /approve on a join request -> the issue author is invited to POE-Builds and
+# gets their own private builds repo POE-Builds/builds-<login> (write access, nobody else can see it).
+# Secrets: ORG_INVITE_TOKEN (fine-grained, owner POE-Builds, Organization permission
+# "Members: Read and write") and ORG_ADMIN_TOKEN (fine-grained, owner POE-Builds, All repositories,
+# "Administration: Read and write"). Optional variable INVITE_TEAM_ID = numeric id of a team to add them to.
+name: Approve join request
+on:
+  issue_comment:
+    types: [created]
+permissions:
+  issues: write
+jobs:
+  approve:
+    if: >-
+      !github.event.issue.pull_request &&
+      startsWith(github.event.comment.body, '/approve') &&
+      contains(github.event.issue.labels.*.name, 'join-request')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
+        env:
+          TEAM_ID: ${{ vars.INVITE_TEAM_ID }}
+          REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ADMIN_TOKEN: ${{ secrets.ORG_ADMIN_TOKEN }}
+        with:
+          github-token: ${{ secrets.ORG_INVITE_TOKEN }}
+          script: |
+            const org = 'POE-Builds'
+            const approver = context.payload.comment.user.login
+            const { data: m } = await github.rest.orgs.getMembershipForUser({ org, username: approver }).catch(() => ({ data: {} }))
+            if (m.role !== 'admin' || m.state !== 'active') {
+              core.notice(`${approver} is not an owner of ${org}; ignored`)
+              return
+            }
+            const user = context.payload.issue.user
+            const opts = { org, invitee_id: user.id, role: 'direct_member' }
+            if (process.env.TEAM_ID) opts.team_ids = [Number(process.env.TEAM_ID)]
+            const lines = []
+            let ok = true
+            try {
+              await github.rest.orgs.createInvitation(opts)
+              lines.push(`Approved by @${approver}. @${user.login}, check your email (or github.com/${org}) for the invite, accept it, then sign in with GitHub in Loot Goblin.`)
+            } catch (e) {
+              ok = false
+              lines.push(`Couldn't send the invite: ${e.message}`)
+            }
+            // Their own private builds repo: only they (and org owners) can see it until they share it
+            if (ok && process.env.ADMIN_TOKEN) {
+              const admin = getOctokit(process.env.ADMIN_TOKEN).rest
+              const repo = `builds-${user.login}`
+              try {
+                await admin.repos.get({ owner: org, repo }).catch(() =>
+                  admin.repos.createInOrg({ org, name: repo, private: true, auto_init: true,
+                    description: `${user.login}'s builds (Loot Goblin / PoB sync)` }))
+                await admin.repos.addCollaborator({ owner: org, repo, username: user.login, permission: 'push' })
+                lines.push(`Your builds repo: ${org}/${repo}. Nobody else sees your builds until you approve their request.`)
+              } catch (e) {
+                lines.push(`Couldn't create your builds repo: ${e.message} (ask the group owner).`)
+              }
+            }
+            // comments and closing use this repo's own token (the org tokens only manage members and repos)
+            const repoGh = getOctokit(process.env.REPO_TOKEN).rest.issues
+            const issue = { owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number }
+            await repoGh.createComment({ ...issue, body: lines.join('\n\n') })
+            if (ok) await repoGh.update({ ...issue, state: 'closed' })
