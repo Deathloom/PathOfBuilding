@@ -5,7 +5,7 @@
 -- Runs in a background sub-script (LaunchSubScript). Does only the GitHub HTTP calls and file writes;
 -- all decisions are made on the main thread by Modules/BuildSync.lua + Modules/BuildSyncCore.lua.
 --
--- Args: mode ("tree" | "apply" | "deviceCode" | "devicePoll" | "refresh" | "whoami"), payloadJson, connectionProtocol, proxyURL, noSSL
+-- Args: mode ("tree" | "apply" | "deviceCode" | "devicePoll" | "refresh" | "whoami" | "api"), payloadJson, connectionProtocol, proxyURL, noSSL
 -- Returns: resultJson, errMsg
 --
 local mode, payloadJson, connectionProtocol, proxyURL, noSSL = ...
@@ -147,6 +147,14 @@ elseif mode == "whoami" then
 	local _, _, repoCode = request("GET", api)
 	result.repoCode = repoCode
 	return dkjson.encode(result), nil
+
+elseif mode == "api" then
+	-- One GitHub REST call (Loot Goblin's problem reports): returns { code, body } even for errors
+	local text, err, code = request(p.method or "GET", "https://api.github.com"..tostring(p.path), nil, p.body)
+	if not code or code == 0 then
+		return nil, err or "No answer from GitHub"
+	end
+	return dkjson.encode({ code = code, body = text and dkjson.decode(text) or nil, error = err }), nil
 
 elseif mode == "tree" then
 	local text, err = request("GET", api.."/git/trees/"..encodePath(p.branch).."?recursive=1")

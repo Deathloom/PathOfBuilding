@@ -7,6 +7,7 @@ Changes in this fork compared with [Path of Building Community](https://github.c
 ## [Unreleased]
 
 ### Added
+- `SyncServer.lua` `report` command: Loot Goblin's problem reports become issues in the builds repo (label `auto-report`, one issue per problem, repeats as comments), sent with the user's own GitHub sign-in (#18).
 - **Headless build sync for Loot Goblin** (`src\SyncServer.lua`): sign in with GitHub, Pull / Push / Sync now and player folder from the overlay, sharing PoB's sign-in and `BuildSync.json` (#17).
 - Tree tab data for Loot Goblin (#11).
 - **Bundled mode** for the copy shipped inside Loot Goblin (`src\bundled.cfg`): no PoB updater, settings in `Documents\Loot Goblin\PathOfBuilding`, builds in `Documents\Loot Goblin\Builds` (#14).
