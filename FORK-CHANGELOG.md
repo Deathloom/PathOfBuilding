@@ -6,6 +6,9 @@ Changes in this fork compared with [Path of Building Community](https://github.c
 
 ## [Unreleased]
 
+### Added (CI)
+- **Loot Goblin smoke test** (`tools/smoke/smoke.py`, workflow *Loot Goblin smoke test*): runs every headless command the overlay uses (load, info, impact, gear, loadouts, gems, tree, treeMap) against PoB's test builds on Windows, for each PR into dev, each push to dev, and each weekly upstream release branch. Catches upstream changes that break the overlay without a merge conflict.
+
 ### Added
 - **Tree map for Loot Goblin** (headless `treeMap` command): the whole passive tree as PoB lays it out (node positions, groups, links, names, stats) per tree version, plus the nodes the selected loadout and the live character allocate (masteries with their effect). Layout is skipped when the overlay already has that tree version.
 

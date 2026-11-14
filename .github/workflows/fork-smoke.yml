@@ -1,0 +1,25 @@
+# Deathloom fork: smoke test of the headless commands Loot Goblin uses
+# (ImpactServer: load, impact, gear, loadouts, gems, tree, treeMap).
+# Runs on every PR into dev (incl. the weekly upstream release PR) and on pushes to dev.
+# A red run means an upstream change broke something the overlay depends on:
+# fix it before merging / releasing.
+name: Loot Goblin smoke test
+
+on:
+  pull_request:
+    branches: [dev]
+  push:
+    branches: [dev]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Run headless commands against the test builds
+        run: python tools/smoke/smoke.py
