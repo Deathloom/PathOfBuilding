@@ -1047,12 +1047,14 @@ local function socketGroups(loadout)
 	local out = { }
 	for index, group in ipairs(build.skillsTab.socketGroupList) do
 		local gems = { }
-		for _, gem in ipairs(group.gemList or { }) do
+		for gemIndex, gem in ipairs(group.gemList or { }) do
 			local data = gem.gemData
 			local name = (data and data.name) or gem.nameSpec
 			if name and name ~= "" then
 				local effect = gem.grantedEffect or (data and data.grantedEffect)
 				table.insert(gems, {
+					-- position in PoB's gem list (Loot Goblin's gem edits)
+					index = gemIndex,
 					name = name,
 					level = gem.level,
 					quality = gem.quality,
@@ -1589,6 +1591,284 @@ function handlers.plan(req)
 		-- Configuration tab: "None" (kill all), "Oak", "Kraityn", "Alira"
 		bandit = build.configTab.input.bandit or "None",
 	}
+end
+
+---------------------------------------------------------------------------
+-- Loot Goblin: edit loadouts from the Loot Goblin window.
+-- {"cmd":"edit","path":"...xml","ops":[...]} loads the build file fresh,
+-- applies the edits the same way PoB's own Copy / Rename / Delete buttons,
+-- skill gem fields and tree clicks do, and returns the build as PoB would
+-- save it ({ xml }). The overlay writes the file (keeping a backup) and loads
+-- it again. Ops:
+--   { op="renameSet", kind="tree"|"items"|"skills", id, title }
+--   { op="copySet", kind, id, title }       -> copy added at the end
+--   { op="deleteSet", kind, id }            (never the last one)
+--   { op="newLoadout", spec, itemSet, skillSet, title }  -> copies of all three, same title
+--   { op="gem", skillSet, group, gem, enabled?, level?, quality? }
+--   { op="group", skillSet, group, enabled }
+--   { op="node", spec, id, alloc=true|false }
+---------------------------------------------------------------------------
+local function cleanTitle(title)
+	if type(title) ~= "string" then
+		error("A name is needed")
+	end
+	title = title:gsub("[%c]", " "):gsub("^%s+", ""):gsub("%s+$", "")
+	if title == "" then
+		error("A name is needed")
+	end
+	return title:sub(1, 100)
+end
+
+local function indexOf(list, value)
+	for i, v in ipairs(list) do
+		if v == value then
+			return i
+		end
+	end
+end
+
+local function editSpec(id)
+	local spec = build.treeTab.specList[tonumber(id) or -1]
+	if not spec then
+		error("Passive tree not found in this build")
+	end
+	return spec
+end
+
+local function editItemSet(id)
+	local set = build.itemsTab.itemSets[tonumber(id) or -1]
+	if not set then
+		error("Item set not found in this build")
+	end
+	return set
+end
+
+local function editSkillSet(id)
+	local set = build.skillsTab.skillSets[tonumber(id) or -1]
+	if not set then
+		error("Skill set not found in this build")
+	end
+	return set
+end
+
+local function copySpec(src, title)
+	local treeTab = build.treeTab
+	local newSpec = new("PassiveSpec"):PassiveSpec(build, src.treeVersion)
+	newSpec.title = title or src.title
+	newSpec.jewels = copyTable(src.jewels)
+	newSpec:RestoreUndoState(src:CreateUndoState())
+	newSpec:BuildClusterJewelGraphs()
+	table.insert(treeTab.specList, newSpec)
+	return #treeTab.specList
+end
+
+local function copyItemSet(src, title)
+	local itemsTab = build.itemsTab
+	local newSet = copyTable(src)
+	newSet.id = 1
+	while itemsTab.itemSets[newSet.id] do
+		newSet.id = newSet.id + 1
+	end
+	newSet.title = title or src.title
+	itemsTab.itemSets[newSet.id] = newSet
+	table.insert(itemsTab.itemSetOrderList, newSet.id)
+	return newSet.id
+end
+
+local function copySkillSet(src, title)
+	local skillsTab = build.skillsTab
+	local newSet = copyTable(src, true)
+	newSet.socketGroupList = { }
+	for _, group in ipairs(src.socketGroupList) do
+		local newGroup = copyTable(group, true)
+		newGroup.gemList = { }
+		for gemIndex, gem in ipairs(group.gemList) do
+			newGroup.gemList[gemIndex] = copyTable(gem, true)
+		end
+		table.insert(newSet.socketGroupList, newGroup)
+	end
+	newSet.id = 1
+	while skillsTab.skillSets[newSet.id] do
+		newSet.id = newSet.id + 1
+	end
+	newSet.title = title or src.title
+	skillsTab.skillSets[newSet.id] = newSet
+	table.insert(skillsTab.skillSetOrderList, newSet.id)
+	return newSet.id
+end
+
+local editOps = { }
+
+function editOps.renameSet(op)
+	local title = cleanTitle(op.title)
+	if op.kind == "tree" then
+		editSpec(op.id).title = title
+	elseif op.kind == "items" then
+		editItemSet(op.id).title = title
+	elseif op.kind == "skills" then
+		editSkillSet(op.id).title = title
+	else
+		error("Unknown set kind")
+	end
+end
+
+function editOps.copySet(op)
+	local title = op.title and cleanTitle(op.title) or nil
+	if op.kind == "tree" then
+		return copySpec(editSpec(op.id), title)
+	elseif op.kind == "items" then
+		return copyItemSet(editItemSet(op.id), title)
+	elseif op.kind == "skills" then
+		return copySkillSet(editSkillSet(op.id), title)
+	end
+	error("Unknown set kind")
+end
+
+function editOps.deleteSet(op)
+	if op.kind == "tree" then
+		local treeTab = build.treeTab
+		local spec = editSpec(op.id)
+		if #treeTab.specList < 2 then
+			error("A build needs at least one passive tree")
+		end
+		local index = indexOf(treeTab.specList, spec)
+		table.remove(treeTab.specList, index)
+		if index == treeTab.activeSpec then
+			treeTab:SetActiveSpec(math.max(1, index - 1))
+		else
+			treeTab.activeSpec = indexOf(treeTab.specList, build.spec) or 1
+		end
+	elseif op.kind == "items" then
+		local itemsTab = build.itemsTab
+		local id = editItemSet(op.id).id
+		if #itemsTab.itemSetOrderList < 2 then
+			error("A build needs at least one item set")
+		end
+		local index = indexOf(itemsTab.itemSetOrderList, id)
+		table.remove(itemsTab.itemSetOrderList, index)
+		itemsTab.itemSets[id] = nil
+		if id == itemsTab.activeItemSetId then
+			itemsTab:SetActiveItemSet(itemsTab.itemSetOrderList[math.max(1, index - 1)])
+		end
+	elseif op.kind == "skills" then
+		local skillsTab = build.skillsTab
+		local id = editSkillSet(op.id).id
+		if #skillsTab.skillSetOrderList < 2 then
+			error("A build needs at least one skill set")
+		end
+		local index = indexOf(skillsTab.skillSetOrderList, id)
+		table.remove(skillsTab.skillSetOrderList, index)
+		skillsTab.skillSets[id] = nil
+		if id == skillsTab.activeSkillSetId then
+			skillsTab:SetActiveSkillSet(skillsTab.skillSetOrderList[math.max(1, index - 1)])
+		end
+	else
+		error("Unknown set kind")
+	end
+end
+
+-- PoB groups a tree, an item set and a skill set with the same name into a loadout
+function editOps.newLoadout(op)
+	local title = cleanTitle(op.title)
+	return {
+		spec = copySpec(editSpec(op.spec), title),
+		itemSet = copyItemSet(editItemSet(op.itemSet), title),
+		skillSet = copySkillSet(editSkillSet(op.skillSet), title),
+	}
+end
+
+local function editGroup(op)
+	local set = editSkillSet(op.skillSet)
+	local group = set.socketGroupList[tonumber(op.group) or -1]
+	if not group then
+		error("Skill group not found")
+	end
+	return group
+end
+
+function editOps.group(op)
+	local group = editGroup(op)
+	if op.enabled ~= nil then
+		group.enabled = op.enabled and true or false
+	end
+end
+
+function editOps.gem(op)
+	local group = editGroup(op)
+	local gem = group.gemList[tonumber(op.gem) or -1]
+	if not gem then
+		error("Gem not found")
+	end
+	if op.enabled ~= nil then
+		gem.enabled = op.enabled and true or false
+	end
+	if op.level ~= nil then
+		local level = math.floor(tonumber(op.level) or 0)
+		if level < 1 or level > 40 then
+			error("Gem level must be 1-40")
+		end
+		gem.level = level
+	end
+	if op.quality ~= nil then
+		local quality = math.floor(tonumber(op.quality) or -1)
+		if quality < 0 or quality > 100 then
+			error("Gem quality must be 0-100")
+		end
+		gem.quality = quality
+	end
+end
+
+function editOps.node(op)
+	local spec = editSpec(op.spec)
+	local node = spec.nodes[tonumber(op.id) or -1]
+	if not node then
+		error("Passive not found in this tree version")
+	end
+	if node.type == "ClassStart" or node.type == "AscendClassStart" then
+		error("Start nodes can't be changed")
+	end
+	spec:BuildAllDependsAndPaths()
+	if op.alloc then
+		if node.alloc then
+			return
+		end
+		if node.type == "Mastery" then
+			error("Pick a mastery's effect in Path of Building")
+		end
+		if node.ascendancyName and node.ascendancyName ~= spec.curAscendClassName then
+			error("That passive is another ascendancy's")
+		end
+		if not node.path then
+			error("That passive can't be reached from this tree")
+		end
+		spec:AllocNode(node)
+	elseif node.alloc then
+		spec:DeallocNode(node)
+	end
+end
+
+function handlers.edit(req)
+	if type(req.path) ~= "string" then
+		error("edit needs the build's path")
+	end
+	if type(req.ops) ~= "table" or #req.ops == 0 or #req.ops > 200 then
+		error("edit needs 1-200 ops")
+	end
+	-- fresh copy of the file: none of this process's loadout choices end up in it
+	handlers.load({ path = req.path })
+	local results = { }
+	for i, op in ipairs(req.ops) do
+		local fn = type(op) == "table" and editOps[op.op]
+		if not fn then
+			error("Unknown edit: " .. tostring(type(op) == "table" and op.op))
+		end
+		results[i] = fn(op) or false
+	end
+	local xml = build:SaveDB(build.buildName or "Build")
+	if not xml then
+		error("PoB couldn't save the build")
+	end
+	return { xml = xml, results = results }
 end
 
 function handlers.quit()
