@@ -1,0 +1,82 @@
+# Per-player builds: someone asks to see a player's builds (form builds-access.yml).
+# - Issue opened: the workflow tags the player whose builds were asked for.
+# - That player comments /approve: the requester gets Read on POE-Builds/builds-<player>.
+#   /deny closes the request. Only the builds' owner can approve or deny.
+# Needs the secret ORG_ADMIN_TOKEN: fine-grained token, resource owner POE-Builds,
+# Repository access "All repositories", Repository permission "Administration: Read and write".
+name: Builds access request
+on:
+  issues:
+    types: [opened]
+  issue_comment:
+    types: [created]
+permissions:
+  issues: write
+jobs:
+  handle:
+    if: >-
+      !github.event.issue.pull_request &&
+      contains(github.event.issue.labels.*.name, 'builds-access') &&
+      (github.event_name == 'issues' ||
+       startsWith(github.event.comment.body, '/approve') ||
+       startsWith(github.event.comment.body, '/deny'))
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
+        env:
+          ADMIN_TOKEN: ${{ secrets.ORG_ADMIN_TOKEN }}
+        with:
+          script: |
+            const org = 'POE-Builds'
+            const issue = { owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number }
+            const say = body => github.rest.issues.createComment({ ...issue, body })
+            const close = () => github.rest.issues.update({ ...issue, state: 'closed' })
+            // Form field "Whose builds?" -> player name (same rules as the apps: letters, numbers, _ - .)
+            const m = (context.payload.issue.body || '').match(/###\s*Whose builds[^\n]*\n+\s*([^\n]+)/)
+            const player = m ? m[1].trim().replace(/^@/, '') : ''
+            if (!/^[A-Za-z0-9_.-]{1,39}$/.test(player) || player.startsWith('.')) {
+              await say(`Couldn't read a valid player name from the form ("${player}").`)
+              return
+            }
+            const repo = `builds-${player}`
+            const admin = getOctokit(process.env.ADMIN_TOKEN).rest
+            const exists = await admin.repos.get({ owner: org, repo }).then(() => true, () => false)
+            if (!exists) {
+              await say(`There is no builds repo for **${player}** (${org}/${repo}).`)
+              return
+            }
+            const requester = context.payload.issue.user.login
+            if (context.eventName === 'issues') {
+              if (requester.toLowerCase() === player.toLowerCase()) {
+                await say('These are your own builds; you already have access.')
+                await close()
+                return
+              }
+              await say(`@${player}, @${requester} would like to see your builds. Comment \`/approve\` to share them (read only) or \`/deny\`.`)
+              return
+            }
+            if (context.payload.issue.state !== 'open') {
+              core.notice('request is closed; ignored')
+              return
+            }
+            if (requester.toLowerCase() === player.toLowerCase()) {
+              core.notice('request for your own builds; ignored')
+              return
+            }
+            const commenter = context.payload.comment.user.login
+            if (commenter.toLowerCase() !== player.toLowerCase()) {
+              core.notice(`${commenter} doesn't own ${repo}; ignored`)
+              return
+            }
+            if (context.payload.comment.body.startsWith('/deny')) {
+              await say(`Not shared (declined by @${commenter}).`)
+              await close()
+              return
+            }
+            try {
+              await admin.repos.addCollaborator({ owner: org, repo, username: requester, permission: 'pull' })
+              await say(`Shared by @${commenter}. @${requester}, ${player}'s builds arrive with your next Pull in Loot Goblin or PoB. (If you were invited rather than added, accept the invite at github.com/${org}/${repo} first.)`)
+              await close()
+            } catch (e) {
+              await say(`Couldn't share: ${e.message}`)
+            }

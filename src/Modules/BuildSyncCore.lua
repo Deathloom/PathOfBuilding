@@ -196,6 +196,35 @@ function core.planPush(localFiles, remoteMap, state, root, player)
 	return plan
 end
 
+-- Per-player repos: only entries inside root/<player>/ (a player's repo may only fill that player's folder)
+function core.playerEntries(entries, root, player)
+	-- Case-insensitive like the Windows file system (and GitHub repo names): poe1/alice/ in builds-Alice
+	-- still lands in that same player's folder, never in anyone else's
+	local prefix = core.toRemote(root, player.."/"):lower()
+	local out = { }
+	for _, e in ipairs(entries) do
+		if type(e.path) == "string" and e.path:sub(1, #prefix):lower() == prefix then
+			table.insert(out, e)
+		end
+	end
+	return out
+end
+
+-- Per-player repos: { {repo, player} } for repo names "<prefix><player>" with a valid player name, sorted
+function core.playerRepos(names, prefix)
+	local out = { }
+	for _, name in ipairs(type(names) == "table" and names or { }) do
+		if type(name) == "string" and name:sub(1, #prefix):lower() == prefix:lower() then
+			local player = name:sub(#prefix + 1)
+			if core.validPlayer(player) then
+				table.insert(out, { repo = name, player = player })
+			end
+		end
+	end
+	table.sort(out, function(a, b) return a.repo:lower() < b.repo:lower() end)
+	return out
+end
+
 -- URL-encode each path segment for the GitHub contents API
 function core.encodePath(path)
 	return (path:gsub("[^%w%-%._~/]", function(c)

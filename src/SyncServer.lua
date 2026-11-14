@@ -18,7 +18,7 @@
 -- Pull/Push: {"event":"progress","id":n,"text":"..."}.
 --
 --   {"id":1,"cmd":"status"}
---   {"id":2,"cmd":"configure","player":"Me","autoSync":true}
+--   {"id":2,"cmd":"configure","player":"Me","autoSync":true,"repoPrefix":"builds-"}
 --   {"id":3,"cmd":"signInStart"}                     -> userCode, verificationUri, deviceCode, interval, expiresIn
 --   {"id":4,"cmd":"signInPoll","deviceCode":"..."}   -> state: pending | slow_down | done | error
 --   {"id":5,"cmd":"signOut"}
@@ -258,7 +258,8 @@ local function setup()
 				return
 			end
 			local s = self.settings
-			payload.owner, payload.repo, payload.branch = s.owner, s.repo, s.branch
+			payload.owner, payload.branch = s.owner, s.branch
+			payload.repo = payload.repo or s.repo
 			payload.buildPath = main.buildPath
 			payload.userAgent = "Loot Goblin (Path of Building fork/"..tostring(launch.versionNumber)..")"
 			local ok, res, err = pcall(chunk, mode, dkjson.encode(payload), nil, nil, false)
@@ -322,6 +323,13 @@ function handlers.configure(req)
 		if player ~= "" then
 			MakeDir(main.buildPath..player)
 		end
+	end
+	if req.repoPrefix ~= nil then
+		local prefix = tostring(req.repoPrefix)
+		if prefix ~= "" and not s.core.validRepoName(prefix) then
+			error("Repo prefix can only use letters, numbers, _ - and .", 0)
+		end
+		s.settings.repoPrefix = prefix
 	end
 	if type(req.autoSync) == "boolean" then
 		s.prefs.autoSync = req.autoSync

@@ -1,0 +1,16 @@
+name: See someone's builds
+description: Ask a player to share their builds with you (Loot Goblin / PoB sync)
+title: "Builds access request"
+labels: ["builds-access"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The player gets a notification. When they comment `/approve`, you can read their builds and they appear on your next Pull. They can take it back at any time (their repo → Settings → Collaborators, or ask the group owner).
+  - type: input
+    id: player
+    attributes:
+      label: Whose builds? (their GitHub name)
+      placeholder: PlayerOne
+    validations:
+      required: true

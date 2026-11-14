@@ -172,6 +172,31 @@ elseif mode == "api" then
 	end
 	return dkjson.encode({ code = code, body = text and dkjson.decode(text) or nil, error = err }), nil
 
+elseif mode == "repos" then
+	-- Names of the repos in the owner organisation that this sign-in can read (per-player builds repos).
+	-- With a GitHub App sign-in GitHub only lists repos both the app and the user can access.
+	local names = { }
+	local owner = nameOk(p.owner) and p.owner or "invalid-owner"
+	for page = 1, 10 do
+		local text, err = request("GET", "https://api.github.com/orgs/"..owner.."/repos?type=all&per_page=100&page="..page)
+		if not text then
+			return nil, err
+		end
+		local list = dkjson.decode(text)
+		if type(list) ~= "table" then
+			return nil, "Unexpected response from GitHub when listing repos"
+		end
+		for _, repo in ipairs(list) do
+			if type(repo) == "table" and type(repo.name) == "string" then
+				table.insert(names, repo.name)
+			end
+		end
+		if #list < 100 then
+			break
+		end
+	end
+	return dkjson.encode({ names = names }), nil
+
 elseif mode == "tree" then
 	local text, err = request("GET", api.."/git/trees/"..encodePath(p.branch).."?recursive=1")
 	if not text then

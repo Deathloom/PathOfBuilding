@@ -1,0 +1,57 @@
+# One-off, run by hand (Actions -> Migrate to per-player repos -> Run workflow).
+# Copies the poe1/<folder>/ folders you list from POE-Builds/poe-builds into private repos
+# POE-Builds/builds-<login> (created if missing; existing files are left alone, new ones added) and
+# gives <login> write access. Folder names are NOT trusted as GitHub names: you map each one by hand.
+# poe-builds itself is not changed.
+# Uses ORG_ADMIN_TOKEN (see builds-access.yml) - it also needs "Contents: Read and write".
+name: Migrate to per-player repos
+on:
+  workflow_dispatch:
+    inputs:
+      players:
+        description: 'folder=github-login pairs, comma separated (e.g. Deathloom=Deathloom,Bob=bob-gh)'
+        required: true
+        type: string
+      dry_run:
+        description: 'Only list what would happen'
+        type: boolean
+        default: true
+permissions: {}
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Copy player folders
+        env:
+          GH_TOKEN: ${{ secrets.ORG_ADMIN_TOKEN }}
+          DRY: ${{ inputs.dry_run }}
+          PLAYERS: ${{ inputs.players }}
+        run: |
+          set -euo pipefail
+          org=POE-Builds
+          git config --global user.name "POE Builds migration"
+          git config --global user.email "noreply@github.com"
+          git clone --depth 1 "https://x-access-token:${GH_TOKEN}@github.com/${org}/poe-builds.git" src
+          IFS=',' read -ra pairs <<< "$PLAYERS"
+          for pair in "${pairs[@]}"; do
+            folder="${pair%%=*}"; login="${pair#*=}"
+            folder="$(echo "$folder" | xargs)"; login="$(echo "$login" | xargs)"
+            if ! [[ "$folder" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*$ && "$login" =~ ^[A-Za-z0-9-]{1,39}$ ]]; then echo "skip '$pair' (bad name)"; continue; fi
+            dir="src/poe1/${folder}/"
+            if [ ! -d "$dir" ]; then echo "skip ${folder} (no such folder)"; continue; fi
+            repo="builds-${login}"
+            echo "== poe1/${folder} -> ${org}/${repo}/poe1/${login} for @${login} ($(find "$dir" -type f | wc -l) files)"
+            [ "$DRY" = "true" ] && continue
+            gh repo view "${org}/${repo}" >/dev/null 2>&1 || gh repo create "${org}/${repo}" --private --add-readme --description "${login}'s builds (Loot Goblin / PoB sync)"
+            gh api -X PUT "repos/${org}/${repo}/collaborators/${login}" -f permission=push >/dev/null
+            rm -rf dst
+            git clone --depth 1 "https://x-access-token:${GH_TOKEN}@github.com/${org}/${repo}.git" dst
+            mkdir -p "dst/poe1/${login}"
+            cp -rn "$dir". "dst/poe1/${login}/"
+            cp src/.gitattributes dst/ 2>/dev/null || true
+            cd dst
+            git add -A
+            git diff --cached --quiet || git commit -qm "Migrated from poe-builds"
+            git push -q
+            cd ..
+          done
