@@ -25,6 +25,8 @@
 --   {"id":9,"cmd":"setLoadout","named":"..."} or {...,"spec":n,"itemSet":n,"skillSet":n}
 --   {"id":10,"cmd":"gems"}      (socket groups of the build and the live character)
 --   {"id":12,"cmd":"tree"}      (keystones / notables / masteries / ascendancy of build and character)
+--   {"id":13,"cmd":"treeMap","haveVersion":"3_28"}  (whole passive tree layout + allocated node ids;
+--                               layout left out when haveVersion matches)
 --   {"id":11,"cmd":"quit"}
 --
 -- Replies: {"id":n,"ok":true,...} or {"id":n,"ok":false,"error":"..."}
@@ -1166,6 +1168,103 @@ function handlers.tree()
 	reply.tree = treeSummary(buildLoadout)
 	if liveLoadout and liveInfo and liveInfo.tree then
 		reply.live = treeSummary(liveLoadout)
+		reply.live.level = liveInfo.level
+		reply.character = liveInfo.character
+	end
+	useLoadout(buildLoadout)
+	return reply
+end
+
+-- Tree map (Loot Goblin window): the whole passive tree as PoB lays it out,
+-- plus which nodes the build's loadout and the live character allocate.
+-- Layout per tree version (the overlay caches it); generated cluster jewel
+-- nodes and proxy groups are left out.
+local mapKind = { Normal = 0, Notable = 1, Keystone = 2, Mastery = 3, Socket = 4, ClassStart = 5, AscendClassStart = 6 }
+local function treeLayout(tree)
+	local nodes, groups, links = { }, { }, { }
+	local usedGroups = { }
+	for id, node in pairs(tree.nodes) do
+		if type(id) == "number" and id < 65536 and node.group and node.x and not node.isProxy and not node.group.isProxy
+			and not node.isBlighted then
+			local stats = { }
+			for _, line in ipairs(node.sd or { }) do
+				table.insert(stats, line)
+			end
+			table.insert(nodes, {
+				id, math.floor(node.x + 0.5), math.floor(node.y + 0.5),
+				mapKind[node.type] or 0, node.g, node.o or 0,
+				node.dn or "", node.ascendancyName or false, stats,
+			})
+			usedGroups[node.g] = node.group
+		end
+	end
+	for g, group in pairs(usedGroups) do
+		groups[tostring(g)] = { math.floor(group.x + 0.5), math.floor(group.y + 0.5) }
+	end
+	for id, node in pairs(tree.nodes) do
+		if type(id) == "number" and id < 65536 and node.group and not node.isProxy and not node.group.isProxy then
+			for _, otherId in pairs(node.out or { }) do
+				otherId = tonumber(otherId)
+				local other = otherId and tree.nodes[otherId]
+				if other and other.group and not other.isProxy and not other.group.isProxy
+					and node.type ~= "ClassStart" and other.type ~= "ClassStart"
+					and node.type ~= "Mastery" and other.type ~= "Mastery"
+					and node.ascendancyName == other.ascendancyName then
+					table.insert(links, { id, otherId })
+				end
+			end
+		end
+	end
+	local radii = { }
+	for i, r in ipairs(tree.orbitRadii or { }) do
+		radii[i] = r
+	end
+	return { nodes = nodes, groups = groups, links = links, orbitRadii = radii }
+end
+
+local function allocated(loadout)
+	useLoadout(loadout)
+	local spec = build.spec
+	local ids, masteries = { }, { }
+	local generated = 0
+	for id, node in pairs(spec.allocNodes) do
+		if type(id) == "number" and id < 65536 then
+			table.insert(ids, id)
+			if node.type == "Mastery" then
+				local effectId = spec.masterySelections and spec.masterySelections[id]
+				local effect = effectId and spec.tree.masteryEffects and spec.tree.masteryEffects[effectId]
+				if effect and effect.sd then
+					masteries[tostring(id)] = table.concat(effect.sd, " / ")
+				end
+			end
+		else
+			generated = generated + 1
+		end
+	end
+	table.sort(ids)
+	local used, ascUsed = spec:CountAllocNodes()
+	return {
+		ids = ids, masteries = masteries, clusterNodes = generated,
+		points = used, ascendancyPoints = ascUsed,
+		className = spec.curClassName,
+		ascendancy = spec.curAscendClassName ~= "None" and spec.curAscendClassName or nil,
+		treeVersion = spec.treeVersion,
+	}
+end
+
+function handlers.treeMap(req)
+	if not loaded then
+		error("No build loaded")
+	end
+	local reply = { build = buildInfo() }
+	reply.alloc = allocated(buildLoadout)
+	local version = reply.alloc.treeVersion
+	reply.version = version
+	if req.haveVersion ~= version then
+		reply.layout = treeLayout(build.spec.tree)
+	end
+	if liveLoadout and liveInfo and liveInfo.tree then
+		reply.live = allocated(liveLoadout)
 		reply.live.level = liveInfo.level
 		reply.character = liveInfo.character
 	end
