@@ -26,7 +26,13 @@
 --   {"id":7,"cmd":"report","key":"...","title":"...","body":"...","seen":"..."}
 --       Problem report as a GitHub issue in the builds repo (label auto-report), with the
 --       user's own sign-in. Same key already open -> a comment ("seen") instead of a new issue.
---   {"id":8,"cmd":"quit"}
+--   {"id":8,"cmd":"board","op":"list"}             -> login, listings (open issues with the board marker + their comments)
+--   {"id":9,"cmd":"board","op":"post","kind":"give|sell|wanted","title":"...","body":"..."} -> number
+--   {"id":10,"cmd":"board","op":"comment","number":12,"body":"..."}
+--   {"id":11,"cmd":"board","op":"close","number":12,"reason":"completed|not_planned"} (own listings only)
+--       Friends' trade board (Loot Goblin): listings are GitHub issues in the builds repo, so
+--       who posted is GitHub's sign-in (can't be faked) and nothing needs merging.
+--   {"id":12,"cmd":"quit"}
 
 local realStdout = io.stdout
 local function logErr(...)
@@ -446,26 +452,39 @@ function handlers.syncNow()
 	return runOps({ "Pull", "Push" })
 end
 
-function handlers.report(req)
-	local s = setup()
-	if type(req.key) ~= "string" or not req.key:match("^[%w%-]+$") or type(req.title) ~= "string" or type(req.body) ~= "string" then
-		error("report needs key, title and body", 0)
-	end
+-- GitHub REST calls on the group's builds repo with the user's own sign-in.
+-- Returns api(method, path, body) or nil + reason.
+local function repoApi(s)
 	if not s:HasAuth() then
-		return { sent = false, reason = "Not signed in to GitHub" }
+		return nil, "Not signed in to GitHub"
 	end
 	local token, tokenErr
 	s:EnsureToken(function(t, e) token, tokenErr = t, e end)
 	if not token then
-		return { sent = false, reason = tokenErr }
+		return nil, tokenErr
 	end
 	local repoPath = "/repos/"..s.core.encodePath(s.settings.owner).."/"..s.core.encodePath(s.settings.repo)
-	local function api(method, path, body)
+	return function(method, path, body)
 		local out
 		s:LaunchWorker("api", { token = token, method = method, path = repoPath..path, body = body and dkjson.encode(body) }, function(res, err)
 			out = res or { code = 0, error = err }
 		end)
 		return out
+	end
+end
+
+local function httpReason(res)
+	return "GitHub HTTP "..tostring(res.code)..(res.error and (": "..tostring(res.error)) or "")
+end
+
+function handlers.report(req)
+	local s = setup()
+	if type(req.key) ~= "string" or not req.key:match("^[%w%-]+$") or type(req.title) ~= "string" or type(req.body) ~= "string" then
+		error("report needs key, title and body", 0)
+	end
+	local api, reason = repoApi(s)
+	if not api then
+		return { sent = false, reason = reason }
 	end
 	local marker = "<!-- loot-goblin-report:"..req.key.." -->"
 	local list = api("GET", "/issues?state=open&labels=auto-report&per_page=100")
@@ -481,6 +500,130 @@ function handlers.report(req)
 	local res = api("POST", "/issues", { title = req.title, body = req.body.."\n\n"..marker, labels = { "auto-report" } })
 	local number = type(res.body) == "table" and res.body.number or nil
 	return { sent = res.code == 201, issue = number, reason = res.code ~= 201 and ("GitHub HTTP "..tostring(res.code)..(res.error and (": "..res.error) or "")) or nil }
+end
+
+---------------------------------------------------------------------------
+-- Friends' trade board
+---------------------------------------------------------------------------
+local BOARD_MARKER = "<!-- loot-goblin-board:v1 -->"
+local BOARD_KINDS = { give = "Give", sell = "Sell", wanted = "Wanted" }
+local BOARD_MAX_BODY = 8000
+local BOARD_MAX_COMMENTS = 40
+
+local function boardNumber(req)
+	local n = tonumber(req.number)
+	if not n or n < 1 or n ~= math.floor(n) then
+		error("board: bad listing number", 0)
+	end
+	return n
+end
+
+local function boardText(v, max, what)
+	if type(v) ~= "string" or not v:match("%S") then
+		error("board: "..what.." missing", 0)
+	end
+	if #v > max then
+		error("board: "..what.." too long", 0)
+	end
+	return v
+end
+
+local function boardIssue(issue)
+	if type(issue) ~= "table" or issue.pull_request or type(issue.body) ~= "string" or not issue.body:find(BOARD_MARKER, 1, true) then
+		return nil
+	end
+	return {
+		number = issue.number,
+		title = issue.title,
+		body = issue.body,
+		author = type(issue.user) == "table" and issue.user.login or nil,
+		created = issue.created_at,
+		updated = issue.updated_at,
+		commentCount = tonumber(issue.comments) or 0,
+		comments = { },
+	}
+end
+
+function handlers.board(req)
+	local s = setup()
+	local api, reason = repoApi(s)
+	if not api then
+		return { signedIn = false, reason = reason }
+	end
+	local login = (s:GetSession() or { }).login
+	local op = req.op
+	if op == "list" then
+		local listings = { }
+		for page = 1, 3 do
+			local res = api("GET", "/issues?state=open&sort=updated&direction=desc&per_page=100&page="..page)
+			if res.code ~= 200 then
+				return { signedIn = true, login = login, success = false, reason = httpReason(res) }
+			end
+			local list = type(res.body) == "table" and res.body or { }
+			for _, issue in ipairs(list) do
+				local l = boardIssue(issue)
+				if l then
+					table.insert(listings, l)
+				end
+			end
+			if #list < 100 then
+				break
+			end
+		end
+		-- claims / "I have one" / questions are comments
+		local fetched = 0
+		for _, l in ipairs(listings) do
+			if l.commentCount > 0 and fetched < BOARD_MAX_COMMENTS then
+				fetched = fetched + 1
+				local res = api("GET", "/issues/"..tostring(l.number).."/comments?per_page=50")
+				if res.code == 200 and type(res.body) == "table" then
+					for _, c in ipairs(res.body) do
+						if type(c) == "table" and type(c.body) == "string" then
+							table.insert(l.comments, {
+								author = type(c.user) == "table" and c.user.login or nil,
+								body = c.body,
+								created = c.created_at,
+							})
+						end
+					end
+				end
+			end
+		end
+		return { signedIn = true, login = login, success = true, listings = listings }
+	elseif op == "post" then
+		local label = BOARD_KINDS[req.kind]
+		if not label then
+			error("board: kind must be give, sell or wanted", 0)
+		end
+		local title = boardText(req.title, 200, "title"):gsub("[\r\n]+", " ")
+		local body = boardText(req.body, BOARD_MAX_BODY, "text")
+		local res = api("POST", "/issues", { title = "["..label.."] "..title, body = body.."\n\n"..BOARD_MARKER })
+		if res.code ~= 201 then
+			return { signedIn = true, login = login, success = false, reason = httpReason(res) }
+		end
+		return { signedIn = true, login = login, success = true, number = type(res.body) == "table" and res.body.number or nil }
+	elseif op == "comment" then
+		local n = boardNumber(req)
+		local body = boardText(req.body, 2000, "comment")
+		local res = api("POST", "/issues/"..n.."/comments", { body = body })
+		return { signedIn = true, login = login, success = res.code == 201, reason = res.code ~= 201 and httpReason(res) or nil }
+	elseif op == "close" then
+		local n = boardNumber(req)
+		local cur = api("GET", "/issues/"..n)
+		if cur.code ~= 200 then
+			return { signedIn = true, login = login, success = false, reason = httpReason(cur) }
+		end
+		-- only the poster closes a listing, and only board listings
+		if not boardIssue(cur.body) then
+			error("board: not a trade board listing", 0)
+		end
+		if not login or type(cur.body.user) ~= "table" or cur.body.user.login ~= login then
+			error("board: only the poster can close this listing", 0)
+		end
+		local res = api("PATCH", "/issues/"..n, { state = "closed", state_reason = req.reason == "not_planned" and "not_planned" or "completed" })
+		return { signedIn = true, login = login, success = res.code == 200, reason = res.code ~= 200 and httpReason(res) or nil }
+	end
+	error("board: unknown op "..tostring(op), 0)
 end
 
 function handlers.quit()
