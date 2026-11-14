@@ -6,6 +6,9 @@ Changes in this fork compared with [Path of Building Community](https://github.c
 
 ## [Unreleased]
 
+### Fixed
+- **Levelling plan: masteries only after a notable of their cluster.** A mastery was put right after the first passive of its group (or first in the list if a small passive of the group was already taken), so Loot Goblin's next-5 asked for a mastery the game wouldn't let you allocate yet. Now it waits for a notable of that group, as the game requires.
+
 ### Added
 - **Headless `edit` command** (Loot Goblin window → edit loadouts): loads the build file fresh, applies edits the way PoB's own buttons do (rename / copy / delete a tree, item set or skill set; new loadout = copies of a tree, item set and skill set under one name; gem enabled / level / quality; skill group on/off; allocate / refund a passive with its path) and returns the build as PoB saves it. Smoke test covers it.
 
