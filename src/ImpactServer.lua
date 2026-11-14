@@ -1439,9 +1439,16 @@ local function planGems(skillSet)
 				local name = (data and data.name) or gem.nameSpec
 				if name and name ~= "" and gem.enabled ~= false then
 					local levels = effect and effect.levels
+					-- the level the build has the gem at (e.g. Clarity 5 = keep it there)
+					local gemLevel = tonumber(gem.level) or 1
+					local maxLevel = (data and data.naturalMaxLevel) or 20
 					table.insert(out, {
 						name = name,
 						reqLevel = (levels and levels[1] and levels[1].levelRequirement) or 1,
+						level = gemLevel,
+						maxLevel = maxLevel,
+						-- character level needed for the gem at the build's level
+						levelReq = (levels and levels[gemLevel] and levels[gemLevel].levelRequirement) or nil,
 						support = (effect and effect.support) and true or false,
 						colour = effect and effect.color or nil,
 						group = (group.label and group.label:match("%S")) and group.label or nil,
