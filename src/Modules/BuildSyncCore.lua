@@ -137,8 +137,49 @@ end
 -- Returns { downloads = { {rel, remotePath, sha, target, conflict} }, upToDate = n }
 -- Rules: local missing or unchanged since last sync -> overwrite with remote.
 --        local changed AND remote differs -> keep local, save remote next to it as a "(GitHub copy)".
-function core.planPull(remoteEntries, getLocalSha, state, root)
-	local plan = { downloads = { }, upToDate = 0, newState = { } }
+-- Deletions (Loot Goblin): a file synced before (in state) that's gone from GitHub was deleted
+-- by its owner. scope = remote path prefix this listing covers (whole repo or one player's folder).
+-- Unchanged here -> plan.removals (moved to "Deleted builds", recoverable). Changed here -> kept
+-- (Push uploads it again). Already gone here -> forgotten. Never on a truncated listing.
+core.massDeleteMin = 20
+function core.isMassDelete(count, total)
+	return count >= core.massDeleteMin and count * 2 > total
+end
+
+function core.planPull(remoteEntries, getLocalSha, state, root, scope, truncated)
+	local plan = { downloads = { }, upToDate = 0, newState = { }, removals = { }, forget = { } }
+	local present = { }
+	for _, entry in ipairs(remoteEntries) do
+		if type(entry.path) == "string" then
+			present[entry.path] = true
+		end
+	end
+	if not truncated then
+		local known = 0
+		for path in pairs(state) do
+			if not scope or path:sub(1, #scope):lower() == scope:lower() then
+				known = known + 1
+				if not present[path] then
+					local rel = core.toRel(root, path)
+					if rel and core.isSyncable(rel) then
+						local L = getLocalSha(rel)
+						if L == nil then
+							table.insert(plan.forget, path)
+						elseif L == state[path] then
+							table.insert(plan.removals, { rel = rel, remotePath = path })
+						else
+							table.insert(plan.forget, path)
+						end
+					end
+				end
+			end
+		end
+		-- a listing that suddenly misses most files is more likely a problem than a clear-out
+		if core.isMassDelete(#plan.removals, known) then
+			plan.blockedRemovals = #plan.removals
+			plan.removals = { }
+		end
+	end
 	for _, entry in ipairs(remoteEntries) do
 		local rel = core.toRel(root, entry.path)
 		if rel and core.isSyncable(rel) and type(entry.sha) == "string" and entry.sha:match("^%w+$") and (tonumber(entry.size) or 0) <= core.maxFileSize then
@@ -192,6 +233,30 @@ function core.planPush(localFiles, remoteMap, state, root, player)
 		else
 			table.insert(plan.conflicts, { rel = rel, remotePath = remotePath })
 		end
+	end
+	-- Deletions (Loot Goblin): synced before, gone from your folder now -> delete on GitHub, but
+	-- only if nobody changed it there since (else it comes back on the next Pull)
+	plan.deletes, plan.forget = { }, { }
+	local remotePrefix = core.toRemote(root, prefix)
+	local known = 0
+	for remotePath, B in pairs(state) do
+		if remotePath:sub(1, #remotePrefix) == remotePrefix then
+			known = known + 1
+			local rel = core.toRel(root, remotePath)
+			if rel and core.isSyncable(rel) and localFiles[rel] == nil then
+				local R = remoteMap[remotePath]
+				if R == nil then
+					table.insert(plan.forget, remotePath)
+				elseif R == B then
+					table.insert(plan.deletes, { rel = rel, remotePath = remotePath, remoteSha = R })
+				end
+			end
+		end
+	end
+	-- empty or moved builds folder: don't wipe GitHub
+	if core.isMassDelete(#plan.deletes, known) then
+		plan.blockedDeletes = #plan.deletes
+		plan.deletes = { }
 	end
 	return plan
 end
