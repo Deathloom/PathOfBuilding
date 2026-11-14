@@ -1433,7 +1433,7 @@ end
 
 local function planGems(skillSet)
 	local out = { }
-	for _, group in ipairs(skillSet and skillSet.socketGroupList or { }) do
+	for groupIndex, group in ipairs(skillSet and skillSet.socketGroupList or { }) do
 		if group.enabled ~= false and not group.source then
 			for _, gem in ipairs(group.gemList or { }) do
 				local data = gem.gemData
@@ -1454,6 +1454,8 @@ local function planGems(skillSet)
 						support = (effect and effect.support) and true or false,
 						colour = effect and effect.color or nil,
 						group = (group.label and group.label:match("%S")) and group.label or nil,
+						-- Deathloom fork: which link group (labels are often empty)
+						groupId = groupIndex,
 						slot = group.slot,
 					})
 				end
