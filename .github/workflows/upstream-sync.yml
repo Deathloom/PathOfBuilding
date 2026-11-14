@@ -16,6 +16,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  actions: write  # start the Loot Goblin smoke test on the new branch
 
 concurrency:
   group: upstream-sync
@@ -70,4 +71,8 @@ jobs:
           # --repo: a fork's default PR target is the parent project; never use that
           gh pr create --repo "$GITHUB_REPOSITORY" --base "$BASE" --head "$BRANCH" \
             --title "Upstream release $TAG" \
-            --body "Merges $UPSTREAM release $TAG into $BASE. The merge $STATE. Check the fork's own changes still work before merging."
+            --body "Merges $UPSTREAM release $TAG into $BASE. The merge $STATE. Check the fork's own changes still work before merging. The Loot Goblin smoke test runs on this branch (Actions tab); merge only when it is green."
+          # PRs opened with the workflow token don't trigger pull_request workflows; start the smoke test directly
+          if [ "$STATE" = "merges cleanly" ]; then
+            gh workflow run fork-smoke.yml --repo "$GITHUB_REPOSITORY" --ref "$BRANCH" || echo "Could not start the smoke test"
+          fi
