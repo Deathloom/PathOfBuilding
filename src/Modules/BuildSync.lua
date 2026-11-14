@@ -35,8 +35,8 @@ local sync = {
 		player = "",
 		-- Per-player repos: when set (e.g. "builds-"), every player has a private repo <owner>/<prefix><player>.
 		-- Push goes to your own repo; Pull reads every <prefix>* repo you've been given access to, and only
-		-- that player's folder from it. Empty = one shared repo (owner/repo) as before.
-		repoPrefix = "",
+		-- that player's folder from it. Empty = one shared repo (owner/repo). Default: per-player (private).
+		repoPrefix = "builds-",
 	},
 	stateByKey = { },
 }
