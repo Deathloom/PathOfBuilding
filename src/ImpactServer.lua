@@ -1524,9 +1524,12 @@ function handlers.plan(req)
 		end
 	end
 	local kept = 0
-	for _ in pairs(base) do
+	local keptIds = { }
+	for id in pairs(base) do
 		kept = kept + 1
+		table.insert(keptIds, id)
 	end
+	table.sort(keptIds)
 	local order = allocationOrder(spec, base)
 	local available = level - 1 + questPoints
 	local taken = math.max(0, math.min(#order, available - kept))
@@ -1545,6 +1548,8 @@ function handlers.plan(req)
 	table.sort(ascendancy, function(a, b) return a.name < b.name end)
 	local skillSet, skillSetId = skillSetFor(phase.title, phase.level)
 	local prevSkillSet = previous and skillSetFor(previous.title, previous.level)
+	local nextPhase = phases[current + 1]
+	local nextSkillSet = nextPhase and skillSetFor(nextPhase.title, nextPhase.level)
 	if not skillSet then
 		skillSetId = buildLoadout.skillSet
 		skillSet = build.skillsTab.skillSets[skillSetId]
@@ -1563,6 +1568,7 @@ function handlers.plan(req)
 		className = spec.curClassName,
 		ascendancyClass = spec.curAscendClassName ~= "None" and spec.curAscendClassName or nil,
 		kept = kept,
+		keptIds = keptIds,
 		taken = taken,
 		order = nodes,
 		refund = refund,
@@ -1570,6 +1576,9 @@ function handlers.plan(req)
 		skillSet = skillSet and (skillSet.title or "Default") or nil,
 		gems = planGems(skillSet),
 		previousGems = prevSkillSet and prevSkillSet ~= skillSet and planGems(prevSkillSet) or nil,
+		-- gems of the next levelling step (swap them in when the character passes this step's level)
+		nextGems = nextSkillSet and nextSkillSet ~= skillSet and planGems(nextSkillSet) or nil,
+		nextSkillSet = nextSkillSet and nextSkillSet ~= skillSet and (nextSkillSet.title or "Default") or nil,
 	}
 end
 
