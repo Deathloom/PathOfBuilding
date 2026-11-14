@@ -207,11 +207,21 @@ local function copyOutput(output)
 	return out
 end
 
+-- Build files are other players' data (friends' builds from sync). PoB's XML loader runs no code,
+-- but a huge file could still hang the server, so cap the size.
+local MAX_BUILD_BYTES = 32 * 1024 * 1024
+
 local function readFile(path)
 	local f, err = io.open(path, "rb")
 	if not f then
 		return nil, err
 	end
+	local size = f:seek("end")
+	if size and size > MAX_BUILD_BYTES then
+		f:close()
+		return nil, "build file is bigger than 32 MB"
+	end
+	f:seek("set")
 	local text = f:read("*a")
 	f:close()
 	return text
@@ -232,8 +242,11 @@ function handlers.load(req)
 			error("Can't read build file: " .. tostring(err))
 		end
 	end
-	if not xml then
+	if type(xml) ~= "string" then
 		error("load needs 'path' or 'xml'")
+	end
+	if #xml > MAX_BUILD_BYTES then
+		error("Build is bigger than 32 MB")
 	end
 	local name = req.name or (req.path and req.path:match("([^/\\]+)%.xml$")) or "Build"
 	loaded = false

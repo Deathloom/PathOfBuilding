@@ -6,6 +6,9 @@ Changes in this fork compared with [Path of Building Community](https://github.c
 
 ## [Unreleased]
 
+### Security
+- **Build sync: safe file names only** (security review part 3): Pull now refuses repo paths that could leave the builds folder or misbehave on Windows (backslashes, `:`, `..`, device names like `CON`/`NUL`, trailing dots/spaces, control characters), anything other than `.xml`/`.txt`, paths deeper than 6 folders and files over 10 MB. The worker re-checks the file name and blob sha before writing. Requests are https-only (also after redirects, max 3), downloads are capped at 10 MB, and PoB's "skip SSL check" option is no longer applied to requests that carry the GitHub sign-in. Owner / repo / branch typed in Sync... are validated before they go into API URLs. The build-impact server refuses build files over 32 MB (friends' builds are other people's data).
+
 ### Added
 - **Self-update for Loot Goblin's copy** (#19): with `src\bundled.cfg` and an installed-style `src\manifest.xml` (branch + platform, written by Loot Goblin's download) PoB's own updater runs against the fork's `master` branch. New workflow **Release PoB (master)** regenerates `manifest.xml` and sets `master` to the released branch plus that commit. `HeadlessWrapper.lua` is now in the manifest (ImpactServer needs it); SyncServer finds `manifest.xml` in `src` too.
 - `SyncServer.lua` `report` command: Loot Goblin's problem reports become issues in the builds repo (label `auto-report`, one issue per problem, repeats as comments), sent with the user's own GitHub sign-in (#18).

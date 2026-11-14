@@ -57,25 +57,77 @@ function core.isCopy(rel)
 	return rel:find(core.copySuffix, 1, true) ~= nil
 end
 
--- Files we never sync: dotfiles/dotfolders, conflict copies, temp files
-function core.isSyncable(rel)
-	if rel == "" or core.isCopy(rel) then
+-- Windows device names: "CON", "nul.xml", "COM1.txt" etc. open the device, not a file
+local reservedNames = { CON = true, PRN = true, AUX = true, NUL = true, ["CONIN$"] = true, ["CONOUT$"] = true }
+for i = 0, 9 do
+	reservedNames["COM"..i] = true
+	reservedNames["LPT"..i] = true
+end
+
+-- Only builds and plain-text notes (active.txt) are synced
+core.allowedExtensions = { xml = true, txt = true }
+core.maxFileSize = 10 * 1024 * 1024
+
+-- One path segment that is safe to create on Windows (and Linux) inside the builds folder.
+-- Remote paths come from other players' commits, so a name like "a\..\..\x" or "x.xml:evil" must never
+-- reach the file system: it would escape the builds folder (backslash) or write an NTFS stream (colon).
+function core.isSafeSegment(part)
+	if part == "" or #part > 120 then
 		return false
 	end
-	for part in rel:gmatch("[^/]+") do
-		if part:sub(1, 1) == "." then
-			return false
-		end
+	-- Printable ASCII only: no control characters, no Unicode lookalikes or right-to-left tricks
+	-- (and Lua's io.open can't open non-ASCII names on Windows anyway)
+	if part:find("[^\32-\126]") or part:find("[\\:%*%?\"<>|]") then
+		return false
 	end
-	if rel:match("~$") or rel:match("%.tmp$") then
+	if part:sub(1, 1) == "." or part:match("[%. ]$") or part:match("^ ") then
+		return false
+	end
+	local stem = part:match("^([^%.]*)"):upper():gsub("%s+$", "")
+	if reservedNames[stem] then
 		return false
 	end
 	return true
 end
 
+-- Files we never sync: anything with an unsafe segment, dotfiles/dotfolders, conflict copies, temp files,
+-- files other than .xml / .txt, paths deeper than 6 levels
+function core.isSyncable(rel)
+	if type(rel) ~= "string" or rel == "" or #rel > 400 or core.isCopy(rel) then
+		return false
+	end
+	if rel:sub(1, 1) == "/" or rel:sub(-1) == "/" or rel:find("//", 1, true) then
+		return false
+	end
+	local depth = 0
+	for part in rel:gmatch("[^/]+") do
+		depth = depth + 1
+		if not core.isSafeSegment(part) then
+			return false
+		end
+	end
+	if depth > 6 then
+		return false
+	end
+	local ext = rel:match("%.([^./]+)$")
+	if not ext or not core.allowedExtensions[ext:lower()] then
+		return false
+	end
+	return true
+end
+
+-- Owner / repo / branch names typed in Sync... (go into API URLs)
+function core.validRepoName(name)
+	return type(name) == "string" and #name <= 100 and name:match("^[%w_%-%.]+$") ~= nil and name ~= "." and name ~= ".."
+end
+
+function core.validBranch(name)
+	return type(name) == "string" and #name <= 200 and name:match("^[%w_%-%./]+$") ~= nil and not name:find("..", 1, true)
+end
+
 -- Player folder names become repo paths, so keep them simple
 function core.validPlayer(player)
-	return type(player) == "string" and player:match("^[%w_%-%.]+$") ~= nil and player:sub(1, 1) ~= "."
+	return type(player) == "string" and player:match("^[%w_%-%.]+$") ~= nil and core.isSafeSegment(player)
 end
 
 -- Plan a pull.
@@ -89,7 +141,7 @@ function core.planPull(remoteEntries, getLocalSha, state, root)
 	local plan = { downloads = { }, upToDate = 0, newState = { } }
 	for _, entry in ipairs(remoteEntries) do
 		local rel = core.toRel(root, entry.path)
-		if rel and core.isSyncable(rel) then
+		if rel and core.isSyncable(rel) and type(entry.sha) == "string" and entry.sha:match("^%w+$") and (tonumber(entry.size) or 0) <= core.maxFileSize then
 			local L = getLocalSha(rel)
 			local R = entry.sha
 			local B = state[entry.path]

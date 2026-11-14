@@ -15,7 +15,11 @@ local dkjson = require("dkjson")
 local base64 = require("base64")
 
 local p = dkjson.decode(payloadJson)
-local api = "https://api.github.com/repos/"..tostring(p.owner).."/"..tostring(p.repo)
+local function nameOk(name)
+	return type(name) == "string" and name:match("^[%w_%-%.]+$") ~= nil and name ~= "." and name ~= ".."
+end
+local api = "https://api.github.com/repos/"..(nameOk(p.owner) and p.owner or "invalid-owner").."/"..(nameOk(p.repo) and p.repo or "invalid-repo")
+local maxDownload = 10 * 1024 * 1024
 
 local function encodePath(path)
 	return (path:gsub("[^%w%-%._~/]", function(c)
@@ -41,6 +45,12 @@ local function request(method, url, accept, body, opts)
 	easy:setopt(curl.OPT_USERAGENT, p.userAgent or "Path of Building fork")
 	easy:setopt(curl.OPT_ACCEPT_ENCODING, "")
 	easy:setopt(curl.OPT_FOLLOWLOCATION, 1)
+	easy:setopt(curl.OPT_MAXREDIRS, 3)
+	-- https only, also after redirects (the token must never go out over plain http)
+	if curl.PROTO_HTTPS then
+		pcall(easy.setopt, easy, curl.OPT_PROTOCOLS, curl.PROTO_HTTPS)
+		pcall(easy.setopt, easy, curl.OPT_REDIR_PROTOCOLS, curl.PROTO_HTTPS)
+	end
 	easy:setopt(curl.OPT_CONNECTTIMEOUT, 15)
 	easy:setopt(curl.OPT_TIMEOUT, 120)
 	if method ~= "GET" then
@@ -55,11 +65,14 @@ local function request(method, url, accept, body, opts)
 	if proxyURL then
 		easy:setopt(curl.OPT_PROXY, proxyURL)
 	end
-	if noSSL then
-		easy:setopt(curl.OPT_SSL_VERIFYPEER, 0)
-		easy:setopt(curl.OPT_SSL_VERIFYHOST, 0)
-	end
+	-- PoB's "skip SSL check" option (noSSL) is deliberately ignored: every sync request carries
+	-- the GitHub sign-in or a device code, and github.com always has a valid certificate.
+	local received = 0
 	easy:setopt_writefunction(function(data)
+		received = received + #data
+		if received > maxDownload then
+			return false -- aborts the transfer
+		end
 		table.insert(responseBody, data)
 		return true
 	end)
@@ -67,6 +80,9 @@ local function request(method, url, accept, body, opts)
 	local code = easy:getinfo(curl.INFO_RESPONSE_CODE)
 	easy:close()
 	local text = table.concat(responseBody)
+	if received > maxDownload then
+		return nil, "Download bigger than 10 MB refused", code
+	end
 	if err then
 		return nil, err:msg(), code
 	end
@@ -172,7 +188,7 @@ elseif mode == "tree" then
 	local entries = { }
 	for _, item in ipairs(tree.tree) do
 		if item.type == "blob" then
-			table.insert(entries, { path = item.path, sha = item.sha })
+			table.insert(entries, { path = item.path, sha = item.sha, size = item.size })
 		end
 	end
 	return dkjson.encode({ entries = entries, truncated = tree.truncated and true or false }), nil
@@ -182,7 +198,10 @@ elseif mode == "apply" then
 	for i, action in ipairs(p.actions) do
 		BuildSyncProgress("%s %d of %d", action.op == "download" and "Pulling" or "Pushing", i, #p.actions)
 		local result = { index = i }
-		if action.op == "download" then
+		if action.op == "download" and not (type(action.sha) == "string" and action.sha:match("^%x+$")
+				and type(action.target) == "string" and not action.target:find("[\\:]") and not ("/"..action.target.."/"):find("/%.%./")) then
+			result.err = "Unsafe file name or sha refused"
+		elseif action.op == "download" then
 			local content, err = request("GET", api.."/git/blobs/"..action.sha, "application/vnd.github.raw+json")
 			if content then
 				local ok, werr = writeFile(p.buildPath..action.target, content)
