@@ -43,6 +43,14 @@ for b in BUILDS:
         ('tree', {}),
         ('treeMap', {}),
         ('plan', {'level': 25, 'questPoints': 4}),
+        # Loot Goblin window: edit loadouts (the file isn't written; edit returns the XML)
+        ('edit', {'path': path_for(b), 'ops': [
+            {'op': 'newLoadout', 'spec': 1, 'itemSet': 1, 'skillSet': 1, 'title': 'Smoke loadout'},
+            {'op': 'copySet', 'kind': 'tree', 'id': 1},
+            {'op': 'renameSet', 'kind': 'tree', 'id': 1, 'title': 'Smoke rename'},
+            {'op': 'gem', 'skillSet': 1, 'group': 1, 'gem': 1, 'level': 3, 'quality': 10},
+            {'op': 'group', 'skillSet': 1, 'group': 1, 'enabled': True},
+        ]}),
     ]
 reqs.append(('quit', {}))
 stdin = ''.join(json.dumps({'id': i + 1, 'cmd': c, **p}) + '\n' for i, (c, p) in enumerate(reqs))
@@ -68,6 +76,8 @@ CHECKS = {
     'treeMap': lambda r: len((r.get('layout') or {}).get('nodes') or []) > 1000
                          and len((r.get('layout') or {}).get('links') or []) > 1000
                          and nonempty((r.get('alloc') or {}).get('ids')),
+    'edit': lambda r: 'Smoke loadout' in (r.get('xml') or '') and 'Smoke rename' in (r.get('xml') or '')
+                      and (r.get('xml') or '').count('<Spec ') >= 3,
     'plan': lambda r: nonempty(r.get('order')) and nonempty(r.get('phases')) and r.get('available') == 28 and isinstance(r.get('keptIds'), (list, dict)) and r.get('bandit') in ('None', 'Oak', 'Kraityn', 'Alira'),
 }
 

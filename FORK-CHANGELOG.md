@@ -7,6 +7,9 @@ Changes in this fork compared with [Path of Building Community](https://github.c
 ## [Unreleased]
 
 ### Added
+- **Headless `edit` command** (Loot Goblin window → edit loadouts): loads the build file fresh, applies edits the way PoB's own buttons do (rename / copy / delete a tree, item set or skill set; new loadout = copies of a tree, item set and skill set under one name; gem enabled / level / quality; skill group on/off; allocate / refund a passive with its path) and returns the build as PoB saves it. Smoke test covers it.
+
+### Added
 - **Build sync handles deletions.** Push deletes on GitHub the builds you deleted from your folder (only if nobody changed them there since your last sync). Pull moves builds their owner deleted on GitHub into `Deleted builds` next to your builds folder (only if you hadn't changed them; edited ones stay and are pushed again). Renames and moves sync as delete + new file. Safety: never on a truncated GitHub listing, and nothing is deleted when 20+ files and more than half of the folder would go at once (moved or emptied folder). Worker `delete` action (GitHub contents API with the last synced sha). 5 new specs.
 
 ### Added (CI)
