@@ -1047,12 +1047,14 @@ local function socketGroups(loadout)
 	local out = { }
 	for index, group in ipairs(build.skillsTab.socketGroupList) do
 		local gems = { }
-		for _, gem in ipairs(group.gemList or { }) do
+		for gemIndex, gem in ipairs(group.gemList or { }) do
 			local data = gem.gemData
 			local name = (data and data.name) or gem.nameSpec
 			if name and name ~= "" then
 				local effect = gem.grantedEffect or (data and data.grantedEffect)
 				table.insert(gems, {
+					-- position in PoB's gem list (Loot Goblin's gem edits)
+					index = gemIndex,
 					name = name,
 					level = gem.level,
 					quality = gem.quality,
