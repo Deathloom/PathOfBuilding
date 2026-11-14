@@ -221,7 +221,7 @@ elseif mode == "tree" then
 elseif mode == "apply" then
 	local results = { }
 	for i, action in ipairs(p.actions) do
-		BuildSyncProgress("%s %d of %d", action.op == "download" and "Pulling" or "Pushing", i, #p.actions)
+		BuildSyncProgress("%s %d of %d", action.op == "download" and "Pulling" or action.op == "delete" and "Deleting" or "Pushing", i, #p.actions)
 		local result = { index = i }
 		if action.op == "download" and not (type(action.sha) == "string" and action.sha:match("^%x+$")
 				and type(action.target) == "string" and not action.target:find("[\\:]") and not ("/"..action.target.."/"):find("/%.%./")) then
@@ -255,6 +255,20 @@ elseif mode == "apply" then
 				end
 			else
 				result.err = rerr
+			end
+		elseif action.op == "delete" then
+			-- Loot Goblin: a build deleted from your folder (only with the sha we last synced)
+			if not (type(action.remoteSha) == "string" and action.remoteSha:match("^%x+$")) then
+				result.err = "No sha for delete"
+			else
+				local body = dkjson.encode({
+					message = "PoB sync: delete "..action.remotePath,
+					sha = action.remoteSha,
+					branch = p.branch,
+				})
+				local text, err = request("DELETE", api.."/contents/"..encodePath(action.remotePath), nil, body)
+				result.ok = text ~= nil
+				result.err = err
 			end
 		end
 		table.insert(results, result)

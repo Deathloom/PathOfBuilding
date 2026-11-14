@@ -6,6 +6,9 @@ Changes in this fork compared with [Path of Building Community](https://github.c
 
 ## [Unreleased]
 
+### Added
+- **Build sync handles deletions.** Push deletes on GitHub the builds you deleted from your folder (only if nobody changed them there since your last sync). Pull moves builds their owner deleted on GitHub into `Deleted builds` next to your builds folder (only if you hadn't changed them; edited ones stay and are pushed again). Renames and moves sync as delete + new file. Safety: never on a truncated GitHub listing, and nothing is deleted when 20+ files and more than half of the folder would go at once (moved or emptied folder). Worker `delete` action (GitHub contents API with the last synced sha). 5 new specs.
+
 ### Added (CI)
 - **Loot Goblin smoke test** (`tools/smoke/smoke.py`, workflow *Loot Goblin smoke test*): runs every headless command the overlay uses (load, info, impact, gear, loadouts, gems, tree, treeMap) against PoB's test builds on Windows, for each PR into dev, each push to dev, and each weekly upstream release branch. Catches upstream changes that break the overlay without a merge conflict.
 

@@ -1,6 +1,52 @@
-describe("BuildSyncCore", function()
-	local core = require("Modules.BuildSyncCore")
+describe("BuildSyncCore", function()	local core = require("Modules.BuildSyncCore")
 	local sha1 = require("sha1").sha1
+
+	it("pull: builds deleted on GitHub are removed here only if unchanged here", function()
+		local state = { ["poe1/A/gone.xml"] = "b1", ["poe1/A/edited.xml"] = "b2", ["poe1/A/missing.xml"] = "b3", ["poe1/A/keep.xml"] = "k" }
+		local locals = { ["A/gone.xml"] = "b1", ["A/edited.xml"] = "mine", ["A/keep.xml"] = "k" }
+		local plan = core.planPull({ { path = "poe1/A/keep.xml", sha = "k" } }, function(rel) return locals[rel] end, state, "poe1", "poe1/A/")
+		assert.are.equals(1, #plan.removals)
+		assert.are.equals("A/gone.xml", plan.removals[1].rel)
+		table.sort(plan.forget)
+		assert.are.same({ "poe1/A/edited.xml", "poe1/A/missing.xml" }, plan.forget)
+	end)
+
+	it("pull: no removals outside the scope or on a truncated listing", function()
+		local state = { ["poe1/B/x.xml"] = "b" }
+		local plan = core.planPull({ }, function() return "b" end, state, "poe1", "poe1/A/")
+		assert.are.equals(0, #plan.removals)
+		plan = core.planPull({ }, function() return "b" end, state, "poe1", nil, true)
+		assert.are.equals(0, #plan.removals)
+	end)
+
+	it("pull: refuses to remove most builds at once", function()
+		local state, locals = { }, { }
+		for i = 1, 30 do state["poe1/A/b"..i..".xml"] = "s"; locals["A/b"..i..".xml"] = "s" end
+		local plan = core.planPull({ { path = "poe1/A/b1.xml", sha = "s" } }, function(rel) return locals[rel] end, state, "poe1", "poe1/A/")
+		assert.are.equals(0, #plan.removals)
+		assert.are.equals(29, plan.blockedRemovals)
+	end)
+
+	it("push: deletes on GitHub what was deleted here, unless changed there", function()
+		local state = { ["poe1/A/del.xml"] = "d", ["poe1/A/theirs.xml"] = "t0", ["poe1/A/stay.xml"] = "s", ["poe1/B/other.xml"] = "o" }
+		local remote = { ["poe1/A/del.xml"] = "d", ["poe1/A/theirs.xml"] = "t1", ["poe1/A/stay.xml"] = "s", ["poe1/B/other.xml"] = "o" }
+		local plan = core.planPush({ ["A/stay.xml"] = "s" }, remote, state, "poe1", "A")
+		assert.are.equals(1, #plan.deletes)
+		assert.are.equals("poe1/A/del.xml", plan.deletes[1].remotePath)
+		assert.are.equals("d", plan.deletes[1].remoteSha)
+	end)
+
+	it("push: an empty or moved folder never wipes GitHub", function()
+		local state, remote = { }, { }
+		for i = 1, 25 do state["poe1/A/b"..i..".xml"] = "s"; remote["poe1/A/b"..i..".xml"] = "s" end
+		local plan = core.planPush({ }, remote, state, "poe1", "A")
+		assert.are.equals(0, #plan.deletes)
+		assert.are.equals(25, plan.blockedDeletes)
+		-- a few deletions are fine
+		plan = core.planPush({ ["A/b1.xml"] = "s" }, { ["poe1/A/b1.xml"] = "s", ["poe1/A/b2.xml"] = "s" }, { ["poe1/A/b1.xml"] = "s", ["poe1/A/b2.xml"] = "s" }, "poe1", "A")
+		assert.are.equals(1, #plan.deletes)
+	end)
+
 
 	it("computes git blob shas", function()
 		-- `printf 'hello\n' | git hash-object --stdin`

@@ -463,6 +463,52 @@ local function listLines(lines, header, items, max)
 	end
 end
 
+-- Loot Goblin: builds deleted on GitHub by their owner are moved here, never deleted outright:
+-- <folder next to the builds folder>/Deleted builds/<same path>
+function sync:DeletedRoot()
+	local parent = main.buildPath:gsub("[/\\]+$", ""):match("^(.*[/\\])") or main.buildPath
+	return parent.."Deleted builds/"
+end
+
+local function makeDirs(path)
+	local acc = path:match("^[/\\]*")
+	for part in path:gmatch("[^/\\]+[/\\]?") do
+		acc = acc..part
+		if part:match("[/\\]$") and not acc:match("^%a:[/\\]$") then
+			MakeDir(acc)
+		end
+	end
+end
+
+function sync:MoveToDeleted(rel)
+	local from = main.buildPath..rel
+	local to = self:DeletedRoot()..rel
+	makeDirs(to:match("^(.*[/\\])") or to)
+	-- keep an older deleted copy: add a number
+	local n, target = 1, to
+	local function exists(path)
+		local f = io.open(path, "rb")
+		if f then f:close() return true end
+		return false
+	end
+	while exists(target) do
+		n = n + 1
+		target = to:gsub("(%.[^%./\\]*)$", " ("..n..")%1")
+		if target == to then target = to.." ("..n..")" end
+	end
+	local ok = os.rename(from, target)
+	if not ok then
+		local content = readFile(from)
+		if not content then return false end
+		local f = io.open(target, "wb")
+		if not f then return false end
+		f:write(content)
+		f:close()
+		ok = os.remove(from)
+	end
+	return ok and true or false
+end
+
 ---------------------------------------------------------------------------
 -- Pull
 ---------------------------------------------------------------------------
@@ -481,11 +527,24 @@ function sync:PullRepo(repo, onlyPlayer, done)
 			entries = core.playerEntries(entries, root, onlyPlayer)
 		end
 		local state = self:State(repo)
-		local plan = core.planPull(entries, localSha, state, root)
+		local scope = onlyPlayer and core.toRemote(root, onlyPlayer.."/") or core.toRemote(root, "")
+		local plan = core.planPull(entries, localSha, state, root, scope, tree.truncated)
 		for path, sha in pairs(plan.newState) do
 			state[path] = sha
 		end
-		local result = { pulled = { }, copies = { }, failed = { }, upToDate = plan.upToDate, truncated = tree.truncated }
+		local result = { pulled = { }, copies = { }, failed = { }, removed = { }, upToDate = plan.upToDate, truncated = tree.truncated, blockedRemovals = plan.blockedRemovals }
+		-- deleted on GitHub by their owner: move ours to "Deleted builds" (only unchanged ones)
+		for _, path in ipairs(plan.forget) do
+			state[path] = nil
+		end
+		for _, r in ipairs(plan.removals) do
+			if self:MoveToDeleted(r.rel) then
+				state[r.remotePath] = nil
+				t_insert(result.removed, r.rel)
+			else
+				t_insert(result.failed, r.rel..": couldn't move to Deleted builds")
+			end
+		end
 		if #plan.downloads == 0 then
 			done(result)
 			return
@@ -526,7 +585,10 @@ function sync:Pull(onDone, out)
 	self:Begin("Listing files on GitHub...", out)
 	local function finishAll(results, listErr)
 		local pulled, copies, failed, upToDate, truncated, errors = { }, { }, { }, 0, false, { }
+		local removed, blocked = { }, 0
 		for _, r in ipairs(results) do
+			for _, x in ipairs(r.removed or { }) do t_insert(removed, x) end
+			blocked = blocked + (r.blockedRemovals or 0)
 			for _, x in ipairs(r.pulled or { }) do t_insert(pulled, x) end
 			for _, x in ipairs(r.copies or { }) do t_insert(copies, x) end
 			for _, x in ipairs(r.failed or { }) do t_insert(failed, x) end
@@ -545,12 +607,16 @@ function sync:Pull(onDone, out)
 			self:Finish("Pull builds", lines, onDone, true, false)
 			return
 		end
-		if #pulled == 0 and #copies == 0 and #failed == 0 and #errors == 0 then
+		if #pulled == 0 and #copies == 0 and #failed == 0 and #errors == 0 and #removed == 0 and blocked == 0 then
 			self:Finish("Pull builds", { "Everything is up to date ("..upToDate.." files)." }, onDone, false)
 			return
 		end
 		local lines = { string.format("Pulled %d, already up to date %d.", #pulled, upToDate) }
 		listLines(lines, "^7Updated:", pulled, 12)
+		listLines(lines, "^7Deleted on GitHub by their owner (moved to \"Deleted builds\" next to your builds folder):", removed, 8)
+		if blocked > 0 then
+			t_insert(lines, "^xFFAA00"..blocked.." builds are missing on GitHub. That many at once looks like a mistake, so nothing was removed here.")
+		end
 		listLines(lines, "^xFFAA00Changed both here and on GitHub - kept yours, saved theirs as a copy:", copies, 8)
 		listLines(lines, "^1Failed:", failed, 8)
 		listLines(lines, "^1Couldn't read:", errors, 6)
@@ -627,12 +693,17 @@ function sync:Push(onDone, out)
 		for path, sha in pairs(plan.newState) do
 			state[path] = sha
 		end
+		for _, path in ipairs(plan.forget) do
+			state[path] = nil
+		end
+		local blockedNote = plan.blockedDeletes and ("^xFFAA00"..plan.blockedDeletes.." synced builds are missing from your folder. That many at once looks like a moved or emptied folder, so nothing was deleted on GitHub.") or nil
 		local conflicts = { }
 		for _, c in ipairs(plan.conflicts) do
 			t_insert(conflicts, c.rel)
 		end
-		if #plan.uploads == 0 then
+		if #plan.uploads == 0 and #plan.deletes == 0 then
 			local lines = { #conflicts == 0 and "Nothing to push ("..plan.upToDate.." files up to date)." or "Nothing pushed." }
+			if blockedNote then t_insert(lines, blockedNote) end
 			listLines(lines, "^xFFAA00Changed on GitHub since your last sync - Pull first, then Push:", conflicts, 8)
 			if not next(localFiles) then
 				t_insert(lines, "^7No files found in your folder: "..main.buildPath..player.."/")
@@ -644,24 +715,40 @@ function sync:Push(onDone, out)
 		for _, u in ipairs(plan.uploads) do
 			t_insert(actions, { op = "upload", rel = u.rel, remotePath = u.remotePath, remoteSha = u.remoteSha })
 		end
+		local firstDelete = #actions + 1
+		for _, d in ipairs(plan.deletes) do
+			t_insert(actions, { op = "delete", rel = d.rel, remotePath = d.remotePath, remoteSha = d.remoteSha })
+		end
 		self.status = "Pushing..."
 		self:RunWorker("apply", { repo = repo, actions = actions }, function(res, errMsg)
 			if not res then
 				self:Finish("Push builds", { "^1Push failed:", "^7"..tostring(errMsg) }, onDone, true, false)
 				return
 			end
-			local pushed, failed = { }, { }
+			local pushed, failed, deleted = { }, { }, { }
 			for _, r in ipairs(res.results) do
-				local u = plan.uploads[r.index]
-				if r.ok then
-					state[u.remotePath] = r.sha or localFiles[u.rel]
-					t_insert(pushed, u.rel)
+				if r.index >= firstDelete then
+					local d = plan.deletes[r.index - firstDelete + 1]
+					if r.ok then
+						state[d.remotePath] = nil
+						t_insert(deleted, d.rel)
+					else
+						t_insert(failed, d.rel..": "..tostring(r.err))
+					end
 				else
-					t_insert(failed, u.rel..": "..tostring(r.err))
+					local u = plan.uploads[r.index]
+					if r.ok then
+						state[u.remotePath] = r.sha or localFiles[u.rel]
+						t_insert(pushed, u.rel)
+					else
+						t_insert(failed, u.rel..": "..tostring(r.err))
+					end
 				end
 			end
-			local lines = { string.format("Pushed %d, already up to date %d.", #pushed, plan.upToDate) }
+			local lines = { string.format("Pushed %d, deleted %d, already up to date %d.", #pushed, #deleted, plan.upToDate) }
 			listLines(lines, "^7Uploaded:", pushed, 12)
+			listLines(lines, "^7Deleted on GitHub:", deleted, 8)
+			if blockedNote then t_insert(lines, blockedNote) end
 			listLines(lines, "^xFFAA00Changed on GitHub since your last sync - Pull first, then Push:", conflicts, 8)
 			listLines(lines, "^1Failed:", failed, 8)
 			self:Finish("Push builds", lines, onDone, true, #failed == 0)
