@@ -51,6 +51,8 @@ jobs:
         fi
         grep -q 'name="ImpactServer.lua"' manifest.xml
         grep -q 'name="HeadlessWrapper.lua"' manifest.xml
+        # HeadlessWrapper.lua dofile()s it: without it the headless PoB can't start
+        grep -q 'name="_SimpleGraphic.def.lua"' manifest.xml
         grep -q 'name="PoBHeadless.exe"' manifest.xml
         grep -q 'raw.githubusercontent.com/Deathloom/PathOfBuilding/{branch}/' manifest.xml
         echo "Files in manifest: $(grep -c '<File ' manifest.xml)"
