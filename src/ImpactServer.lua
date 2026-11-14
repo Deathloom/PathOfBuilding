@@ -1548,6 +1548,8 @@ function handlers.plan(req)
 	table.sort(ascendancy, function(a, b) return a.name < b.name end)
 	local skillSet, skillSetId = skillSetFor(phase.title, phase.level)
 	local prevSkillSet = previous and skillSetFor(previous.title, previous.level)
+	local nextPhase = phases[current + 1]
+	local nextSkillSet = nextPhase and skillSetFor(nextPhase.title, nextPhase.level)
 	if not skillSet then
 		skillSetId = buildLoadout.skillSet
 		skillSet = build.skillsTab.skillSets[skillSetId]
@@ -1574,6 +1576,9 @@ function handlers.plan(req)
 		skillSet = skillSet and (skillSet.title or "Default") or nil,
 		gems = planGems(skillSet),
 		previousGems = prevSkillSet and prevSkillSet ~= skillSet and planGems(prevSkillSet) or nil,
+		-- gems of the next levelling step (swap them in when the character passes this step's level)
+		nextGems = nextSkillSet and nextSkillSet ~= skillSet and planGems(nextSkillSet) or nil,
+		nextSkillSet = nextSkillSet and nextSkillSet ~= skillSet and (nextSkillSet.title or "Default") or nil,
 	}
 end
 
