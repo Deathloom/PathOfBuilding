@@ -13,7 +13,9 @@ import json, os, subprocess, sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SRC = os.path.join(ROOT, 'src')
-BUILDS = ['spec/TestBuilds/3.13/Dual Savior.xml', 'spec/TestBuilds/3.13/Generals Perforate Zerker.xml']
+BUILDS = ['spec/TestBuilds/3.13/Dual Savior.xml', 'spec/TestBuilds/3.13/Generals Perforate Zerker.xml',
+          # Perforate build with extra "Level 12" / "Leveling lvl 40" trees (levelling planner)
+          'tools/smoke/levelling.xml']
 RING = '\n'.join([
     'Item Class: Rings', 'Rarity: Rare', 'Smoke Loop', 'Two-Stone Ring', '--------',
     'Item Level: 80', '--------', '+12% to Fire and Cold Resistances (implicit)', '--------',
@@ -40,6 +42,7 @@ for b in BUILDS:
         ('gems', {}),
         ('tree', {}),
         ('treeMap', {}),
+        ('plan', {'level': 25, 'questPoints': 4}),
     ]
 reqs.append(('quit', {}))
 stdin = ''.join(json.dumps({'id': i + 1, 'cmd': c, **p}) + '\n' for i, (c, p) in enumerate(reqs))
@@ -65,6 +68,7 @@ CHECKS = {
     'treeMap': lambda r: len((r.get('layout') or {}).get('nodes') or []) > 1000
                          and len((r.get('layout') or {}).get('links') or []) > 1000
                          and nonempty((r.get('alloc') or {}).get('ids')),
+    'plan': lambda r: nonempty(r.get('order')) and nonempty(r.get('phases')) and r.get('available') == 28,
 }
 
 failed = 0
