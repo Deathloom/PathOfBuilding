@@ -68,7 +68,7 @@ CHECKS = {
     'treeMap': lambda r: len((r.get('layout') or {}).get('nodes') or []) > 1000
                          and len((r.get('layout') or {}).get('links') or []) > 1000
                          and nonempty((r.get('alloc') or {}).get('ids')),
-    'plan': lambda r: nonempty(r.get('order')) and nonempty(r.get('phases')) and r.get('available') == 28,
+    'plan': lambda r: nonempty(r.get('order')) and nonempty(r.get('phases')) and r.get('available') == 28 and isinstance(r.get('keptIds'), (list, dict)),
 }
 
 failed = 0

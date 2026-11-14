@@ -10,6 +10,7 @@ Changes in this fork compared with [Path of Building Community](https://github.c
 - **Loot Goblin smoke test** (`tools/smoke/smoke.py`, workflow *Loot Goblin smoke test*): runs every headless command the overlay uses (load, info, impact, gear, loadouts, gems, tree, treeMap) against PoB's test builds on Windows, for each PR into dev, each push to dev, and each weekly upstream release branch. Catches upstream changes that break the overlay without a merge conflict.
 
 ### Added
+- `plan` also returns `keptIds` (nodes carried over from the previous levelling tree) for the tree map's levelling view.
 - **Levelling planner for Loot Goblin** (headless `plan` command): takes the character level and quest passive points, picks the levelling tree whose name carries the next level ("Level 30", "lvl 30", "Lv. 30"; the selected loadout is the end goal) and returns the order to take its nodes from the previous tree (nearest notable / keystone / jewel socket first, small passives on the way, masteries after a node of their group), how many should be taken by now, nodes to refund, new ascendancy notables and the matching skill set's gems with their level requirements. Smoke test covers it with `tools/smoke/levelling.xml`.
 - **Tree map for Loot Goblin** (headless `treeMap` command): the whole passive tree as PoB lays it out (node positions, groups, links, names, stats) per tree version, plus the nodes the selected loadout and the live character allocate (masteries with their effect). Layout is skipped when the overlay already has that tree version.
 

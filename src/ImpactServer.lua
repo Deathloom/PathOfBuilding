@@ -1524,9 +1524,12 @@ function handlers.plan(req)
 		end
 	end
 	local kept = 0
-	for _ in pairs(base) do
+	local keptIds = { }
+	for id in pairs(base) do
 		kept = kept + 1
+		table.insert(keptIds, id)
 	end
+	table.sort(keptIds)
 	local order = allocationOrder(spec, base)
 	local available = level - 1 + questPoints
 	local taken = math.max(0, math.min(#order, available - kept))
@@ -1563,6 +1566,7 @@ function handlers.plan(req)
 		className = spec.curClassName,
 		ascendancyClass = spec.curAscendClassName ~= "None" and spec.curAscendClassName or nil,
 		kept = kept,
+		keptIds = keptIds,
 		taken = taken,
 		order = nodes,
 		refund = refund,
