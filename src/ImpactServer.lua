@@ -1396,17 +1396,18 @@ local function allocationOrder(spec, haveIds)
 	for _, node in ipairs(rest) do
 		table.insert(order, node)
 	end
-	-- a mastery can be taken once a node of its group is allocated
+	-- a mastery can only be taken once a notable of its group is allocated
+	-- (a small passive of the group isn't enough)
 	for _, mastery in ipairs(masteries) do
 		local at = #order
 		for id in pairs(haveIds) do
 			local node = spec.allocNodes[id]
-			if node and node.g == mastery.g and node.type ~= "Mastery" then
+			if node and node.g == mastery.g and node.type == "Notable" then
 				at = 0
 			end
 		end
 		for i, node in ipairs(at > 0 and order or { }) do
-			if node.g == mastery.g then
+			if node.g == mastery.g and node.type == "Notable" then
 				at = i
 				break
 			end
