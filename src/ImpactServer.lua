@@ -1288,6 +1288,291 @@ function handlers.gems()
 	return reply
 end
 
+-- Levelling planner (Loot Goblin window, "Next" tab). No live character data:
+-- the overlay sends the character level (Client.txt "is now level N") and the
+-- quest passive points so far (campaign guide). Trees whose names carry a level
+-- ("Level 30", "lvl 30", "Lv. 30") are the levelling steps; the step for the
+-- character is the first one at or above its level. The order to take nodes is
+-- worked out from the previous step's tree (or the class start): nearest
+-- notable / keystone / jewel socket first, with the small passives on the way.
+local function titleLevel(title)
+	local t = tostring(title or ""):lower()
+	local n = t:match("level%s*(%d+)") or t:match("lvl%.?%s*(%d+)") or t:match("lv%.?%s*(%d+)")
+	n = tonumber(n)
+	if n and n >= 1 and n <= 100 then
+		return n
+	end
+end
+
+local planKindRank = { Keystone = 1, Notable = 2, Socket = 3 }
+
+local function isTreePoint(node)
+	return not node.ascendancyName and node.type ~= "ClassStart" and node.type ~= "AscendClassStart"
+end
+
+-- Order to allocate the target spec's nodes, starting from haveIds (a set).
+local function allocationOrder(spec, haveIds)
+	local have, remaining = { }, { }
+	local startId = spec.curClass and spec.curClass.startNodeId
+	if startId then
+		have[startId] = true
+	end
+	for id in pairs(haveIds) do
+		if spec.allocNodes[id] then
+			have[id] = true
+		end
+	end
+	local masteries = { }
+	local left = 0
+	for id, node in pairs(spec.allocNodes) do
+		if isTreePoint(node) and not have[id] then
+			if node.type == "Mastery" then
+				table.insert(masteries, node)
+			else
+				remaining[id] = node
+				left = left + 1
+			end
+		end
+	end
+	local order = { }
+	while left > 0 do
+		-- BFS over the target tree from everything we have
+		local dist, parent, queue, head = { }, { }, { }, 1
+		for id in pairs(have) do
+			dist[id] = 0
+			table.insert(queue, id)
+		end
+		local best, bestScore
+		while queue[head] do
+			local id = queue[head]
+			head = head + 1
+			local node = spec.nodes[id] or spec.allocNodes[id]
+			for _, other in ipairs(node and node.linked or { }) do
+				local oid = other.id
+				if remaining[oid] and dist[oid] == nil then
+					dist[oid] = dist[id] + 1
+					parent[oid] = id
+					table.insert(queue, oid)
+					local rank = planKindRank[other.type] or 9
+					local score = dist[oid] * 10 + rank
+					if rank < 9 and (not bestScore or score < bestScore) then
+						best, bestScore = oid, score
+					end
+				end
+			end
+		end
+		if not best then
+			-- only small passives left: nearest first
+			for id, d in pairs(dist) do
+				if remaining[id] and (not bestScore or d < bestScore or (d == bestScore and id < best)) then
+					best, bestScore = id, d
+				end
+			end
+		end
+		if not best then
+			break -- the rest isn't connected (shouldn't happen in a valid tree)
+		end
+		local path = { }
+		local id = best
+		while id and not have[id] do
+			table.insert(path, 1, id)
+			id = parent[id]
+		end
+		for _, pid in ipairs(path) do
+			have[pid] = true
+			remaining[pid] = nil
+			left = left - 1
+			table.insert(order, spec.allocNodes[pid])
+		end
+	end
+	-- unreachable leftovers keep a stable order
+	local rest = { }
+	for _, node in pairs(remaining) do
+		table.insert(rest, node)
+	end
+	table.sort(rest, function(a, b) return a.id < b.id end)
+	for _, node in ipairs(rest) do
+		table.insert(order, node)
+	end
+	-- a mastery can be taken once a node of its group is allocated
+	for _, mastery in ipairs(masteries) do
+		local at = #order
+		for id in pairs(haveIds) do
+			local node = spec.allocNodes[id]
+			if node and node.g == mastery.g and node.type ~= "Mastery" then
+				at = 0
+			end
+		end
+		for i, node in ipairs(at > 0 and order or { }) do
+			if node.g == mastery.g then
+				at = i
+				break
+			end
+		end
+		table.insert(order, at + 1, mastery)
+	end
+	return order
+end
+
+local function planNode(spec, node)
+	local entry = { id = node.id, name = node.dn, type = node.type }
+	if node.type == "Mastery" then
+		local effectId = spec.masterySelections and spec.masterySelections[node.id]
+		local effect = effectId and spec.tree.masteryEffects and spec.tree.masteryEffects[effectId]
+		if effect and effect.sd then
+			entry.effect = table.concat(effect.sd, " / ")
+		end
+	end
+	if node.type == "Normal" or node.type == "Socket" then
+		entry.stats = table.concat(node.sd or { }, " / ")
+	end
+	return entry
+end
+
+local function planGems(skillSet)
+	local out = { }
+	for _, group in ipairs(skillSet and skillSet.socketGroupList or { }) do
+		if group.enabled ~= false and not group.source then
+			for _, gem in ipairs(group.gemList or { }) do
+				local data = gem.gemData
+				local effect = gem.grantedEffect or (data and data.grantedEffect)
+				local name = (data and data.name) or gem.nameSpec
+				if name and name ~= "" and gem.enabled ~= false then
+					local levels = effect and effect.levels
+					table.insert(out, {
+						name = name,
+						reqLevel = (levels and levels[1] and levels[1].levelRequirement) or 1,
+						support = (effect and effect.support) and true or false,
+						colour = effect and effect.color or nil,
+						group = (group.label and group.label:match("%S")) and group.label or nil,
+						slot = group.slot,
+					})
+				end
+			end
+		end
+	end
+	return out
+end
+
+-- the skill set that goes with a tree: same title, else same level in the title
+local function skillSetFor(title, level)
+	local skillsTab = build.skillsTab
+	local byLevel
+	for _, id in ipairs(skillsTab.skillSetOrderList) do
+		local set = skillsTab.skillSets[id]
+		if set then
+			if (set.title or "Default") == title then
+				return set, id
+			end
+			if level and not byLevel and titleLevel(set.title) == level then
+				byLevel = id
+			end
+		end
+	end
+	if byLevel then
+		return skillsTab.skillSets[byLevel], byLevel
+	end
+end
+
+-- {"cmd":"plan","level":24,"questPoints":5}
+function handlers.plan(req)
+	if not loaded then
+		error("No build loaded")
+	end
+	useLoadout(buildLoadout)
+	local treeTab = build.treeTab
+	local level = math.max(1, math.min(100, math.floor(tonumber(req.level) or 1)))
+	local questPoints = math.max(0, math.min(30, math.floor(tonumber(req.questPoints) or 0)))
+	local phases = { }
+	for index, spec in ipairs(treeTab.specList) do
+		local l = titleLevel(spec.title)
+		if l and (not liveLoadout or index ~= liveLoadout.spec) then
+			table.insert(phases, { spec = index, level = l, title = spec.title or "Default" })
+		end
+	end
+	table.sort(phases, function(a, b)
+		if a.level ~= b.level then return a.level < b.level end
+		return a.spec < b.spec
+	end)
+	-- the loadout picked in the overlay is the end goal when its tree has no level
+	local selected = buildLoadout.spec
+	if not titleLevel(treeTab.specList[selected] and treeTab.specList[selected].title) then
+		table.insert(phases, { spec = selected, title = treeTab.specList[selected].title or "Default" })
+	end
+	local current = #phases
+	for i, phase in ipairs(phases) do
+		if not phase.level or phase.level >= level then
+			current = i
+			break
+		end
+	end
+	local phase = phases[current]
+	local spec = treeTab.specList[phase.spec]
+	local previous = phases[current - 1]
+	local base = { }
+	local refund = { }
+	if previous then
+		local prevSpec = treeTab.specList[previous.spec]
+		for id, node in pairs(prevSpec.allocNodes) do
+			if isTreePoint(node) then
+				if spec.allocNodes[id] then
+					base[id] = true
+				else
+					table.insert(refund, planNode(prevSpec, node))
+				end
+			end
+		end
+	end
+	local kept = 0
+	for _ in pairs(base) do
+		kept = kept + 1
+	end
+	local order = allocationOrder(spec, base)
+	local available = level - 1 + questPoints
+	local taken = math.max(0, math.min(#order, available - kept))
+	local nodes = { }
+	for _, node in ipairs(order) do
+		table.insert(nodes, planNode(spec, node))
+	end
+	-- ascendancy: what this tree adds over the previous one
+	local ascendancy = { }
+	local prevAsc = previous and treeTab.specList[previous.spec].allocNodes or { }
+	for id, node in pairs(spec.allocNodes) do
+		if node.ascendancyName and node.type == "Notable" and not node.isMultipleChoiceOption and not prevAsc[id] then
+			table.insert(ascendancy, { id = id, name = node.dn })
+		end
+	end
+	table.sort(ascendancy, function(a, b) return a.name < b.name end)
+	local skillSet, skillSetId = skillSetFor(phase.title, phase.level)
+	local prevSkillSet = previous and skillSetFor(previous.title, previous.level)
+	if not skillSet then
+		skillSetId = buildLoadout.skillSet
+		skillSet = build.skillsTab.skillSets[skillSetId]
+	end
+	local list = { }
+	for _, p in ipairs(phases) do
+		table.insert(list, { title = p.title, level = p.level })
+	end
+	return {
+		build = buildInfo(),
+		level = level,
+		questPoints = questPoints,
+		available = available,
+		phases = list,
+		phase = current,
+		className = spec.curClassName,
+		ascendancyClass = spec.curAscendClassName ~= "None" and spec.curAscendClassName or nil,
+		kept = kept,
+		taken = taken,
+		order = nodes,
+		refund = refund,
+		ascendancy = ascendancy,
+		skillSet = skillSet and (skillSet.title or "Default") or nil,
+		gems = planGems(skillSet),
+		previousGems = prevSkillSet and prevSkillSet ~= skillSet and planGems(prevSkillSet) or nil,
+	}
+end
+
 function handlers.quit()
 	return { bye = true }
 end
