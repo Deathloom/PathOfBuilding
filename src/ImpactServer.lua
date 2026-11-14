@@ -1579,6 +1579,8 @@ function handlers.plan(req)
 		-- gems of the next levelling step (swap them in when the character passes this step's level)
 		nextGems = nextSkillSet and nextSkillSet ~= skillSet and planGems(nextSkillSet) or nil,
 		nextSkillSet = nextSkillSet and nextSkillSet ~= skillSet and (nextSkillSet.title or "Default") or nil,
+		-- Configuration tab: "None" (kill all), "Oak", "Kraityn", "Alira"
+		bandit = build.configTab.input.bandit or "None",
 	}
 end
 
