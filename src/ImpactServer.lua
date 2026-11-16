@@ -27,6 +27,10 @@
 --   {"id":12,"cmd":"tree"}      (keystones / notables / masteries / ascendancy of build and character)
 --   {"id":13,"cmd":"treeMap","haveVersion":"3_28"}  (whole passive tree layout + allocated node ids;
 --                               layout left out when haveVersion matches)
+--   {"id":14,"cmd":"timeless","sockets":true} or {...,"jewel":"Lethal Pride","conqueror":"Kaom","seed":12345,"socket":26725}
+--                               (timeless jewel explorer, scratch tree of the latest version)
+--   {"id":15,"cmd":"craftBases"}   {"id":16,"cmd":"craftMods","base":"Vaal Regalia","ilvl":86,"influences":["shaper"]}
+--                               (crafting simulator: mod pool with spawn weights + essences)
 --   {"id":11,"cmd":"quit"}
 --
 -- Replies: {"id":n,"ok":true,...} or {"id":n,"ok":false,"error":"..."}
@@ -1872,6 +1876,299 @@ function handlers.edit(req)
 		error("PoB couldn't save the build")
 	end
 	return { xml = xml, results = results }
+end
+
+-- Timeless jewel explorer (Orbhoarder window): what a Timeless Jewel with a
+-- given seed and conqueror does to the passives around a socket. Uses PoB's
+-- own conquest code (PassiveSpec:BuildAllDependsAndPaths and the jewel LUTs)
+-- on a scratch tree of the latest version, so the build is never touched.
+-- Abyss jewels (no radius) are left out.
+local timelessJewels = {
+	["Glorious Vanity"] = { type = 1, line = "Bathed in the blood of %d sacrificed in the name of %s", by = "Vaal",
+		conquerors = { "Doryani", "Xibaqua", "Ahuana" } },
+	["Lethal Pride"] = { type = 2, line = "Commanded leadership over %d warriors under %s", by = "Karui",
+		conquerors = { "Kaom", "Rakiata", "Akoya" } },
+	["Brutal Restraint"] = { type = 3, line = "Denoted service of %d dekhara in the akhara of %s", by = "Maraketh",
+		conquerors = { "Asenath", "Nasima", "Balbala" } },
+	["Militant Faith"] = { type = 4, line = "Carved to glorify %d new faithful converted by High Templar %s", by = "Templars",
+		conquerors = { "Avarius", "Dominus", "Maxarius" } },
+	["Elegant Hubris"] = { type = 5, line = "Commissioned %d coins to commemorate %s", by = "Eternal Empire",
+		conquerors = { "Cadiro", "Victario", "Caspiro" }, seedStep = 20 },
+	["Heroic Tragedy"] = { type = 6, line = "Remembrancing %d songworthy deeds by the line of %s", by = "Kalguur",
+		conquerors = { "Vorana", "Uhtred", "Medved" } },
+}
+local timelessOrder = { "Glorious Vanity", "Lethal Pride", "Brutal Restraint", "Militant Faith", "Elegant Hubris", "Heroic Tragedy" }
+local TEMP_ITEM_ID = 999999
+local timelessSpec
+
+local function scratchSpec()
+	if not timelessSpec or timelessSpec.treeVersion ~= latestTreeVersion then
+		timelessSpec = new("PassiveSpec"):PassiveSpec(build, latestTreeVersion)
+	end
+	return timelessSpec
+end
+
+local function largeRadiusIndex()
+	for i, r in ipairs(data.jewelRadius) do
+		if r.label == "Large" and r.inner == 0 then
+			return i
+		end
+	end
+	return 3
+end
+
+local function radiusSockets(spec)
+	local sockets = { }
+	local large = largeRadiusIndex()
+	for id, node in pairs(spec.nodes) do
+		if node.type == "Socket" and not node.expansionJewel and type(id) == "number" and id < 65536 and node.nodesInRadius then
+			local inRadius = node.nodesInRadius[large] or { }
+			local keystone
+			local notables = { }
+			for _, other in pairs(inRadius) do
+				if other.type == "Keystone" and not other.ascendancyName then
+					keystone = other.dn
+				elseif other.type == "Notable" and not other.ascendancyName then
+					table.insert(notables, other.dn)
+				end
+			end
+			table.sort(notables)
+			table.insert(sockets, {
+				id = id, keystone = keystone, notables = notables,
+				alloc = (build.spec and build.spec.allocNodes[id]) and true or false,
+				x = math.floor(node.x + 0.5), y = math.floor(node.y + 0.5),
+			})
+		end
+	end
+	table.sort(sockets, function(a, b) return a.id < b.id end)
+	return sockets
+end
+
+local function nodeStats(node)
+	local stats = { }
+	for _, line in ipairs(node.sd or { }) do
+		local clean = stripColours(line):gsub("^%s+", ""):gsub("%s+$", "")
+		if clean ~= "" then
+			table.insert(stats, clean)
+		end
+	end
+	return stats
+end
+
+function handlers.timeless(req)
+	if not loaded then
+		error("No build loaded")
+	end
+	local jewels = { }
+	for _, name in ipairs(timelessOrder) do
+		local j = timelessJewels[name]
+		local step = j.seedStep or 1
+		table.insert(jewels, {
+			name = name, conquerors = j.conquerors, by = j.by,
+			seedMin = data.timelessJewelSeedMin[j.type] * step,
+			seedMax = data.timelessJewelSeedMax[j.type] * step,
+			seedStep = step,
+		})
+	end
+	local spec = scratchSpec()
+	local reply = { jewels = jewels, treeVersion = latestTreeVersion }
+	if req.sockets then
+		reply.sockets = radiusSockets(spec)
+	end
+	if not req.jewel then
+		return reply
+	end
+
+	local j = timelessJewels[req.jewel]
+	if not j then
+		error("Unknown timeless jewel: " .. tostring(req.jewel))
+	end
+	local conqueror
+	for _, c in ipairs(j.conquerors) do
+		if c == req.conqueror then
+			conqueror = c
+		end
+	end
+	if not conqueror then
+		error("Unknown conqueror for " .. req.jewel .. ": " .. tostring(req.conqueror))
+	end
+	local seed = tonumber(req.seed)
+	local step = j.seedStep or 1
+	if not seed or seed ~= math.floor(seed) or seed % step ~= 0
+		or seed < data.timelessJewelSeedMin[j.type] * step or seed > data.timelessJewelSeedMax[j.type] * step then
+		error(string.format("Seed must be a whole number from %d to %d%s", data.timelessJewelSeedMin[j.type] * step,
+			data.timelessJewelSeedMax[j.type] * step, step > 1 and (" in steps of " .. step) or ""))
+	end
+	local socketId = tonumber(req.socket)
+	local socket = socketId and spec.nodes[socketId]
+	if not socket or socket.type ~= "Socket" then
+		error("Pick a jewel socket")
+	end
+
+	local text = table.concat({
+		"Rarity: Unique", req.jewel, "Timeless Jewel", "Radius: Large", "Implicits: 0",
+		string.format(j.line, seed, conqueror),
+		"Passives in radius are Conquered by the " .. j.by, "Historic",
+	}, "\n")
+	local item = new("Item"):Item(text)
+	item:BuildModList()
+	if not (item.jewelData and item.jewelData.conqueredBy and item.jewelRadiusIndex) then
+		error("PoB couldn't read the jewel")
+	end
+	item.id = TEMP_ITEM_ID
+
+	-- fresh state on the scratch tree: only this socket allocated, only this jewel in it
+	for id in pairs(spec.allocNodes) do
+		spec.nodes[id].alloc = false
+	end
+	spec.allocNodes = { [socketId] = socket }
+	socket.alloc = true
+	spec.jewels = { [socketId] = TEMP_ITEM_ID }
+	build.itemsTab.items[TEMP_ITEM_ID] = item
+	local ok, err = pcall(function() spec:BuildAllDependsAndPaths() end)
+	build.itemsTab.items[TEMP_ITEM_ID] = nil
+	spec.jewels = { }
+	if not ok then
+		error(err)
+	end
+
+	local nodes = { }
+	local liveAlloc = build.spec and build.spec.allocNodes or { }
+	for id in pairs(socket.nodesInRadius[item.jewelRadiusIndex] or { }) do
+		local node = spec.nodes[id]
+		local orig = spec.tree.nodes[id]
+		if node and orig and not node.ascendancyName and (node.type == "Normal" or node.type == "Notable" or node.type == "Keystone") then
+			local stats = nodeStats(node)
+			local before = nodeStats(orig)
+			table.insert(nodes, {
+				id = id, type = orig.type, name = orig.dn, newName = node.dn ~= orig.dn and node.dn or nil,
+				stats = stats, before = before,
+				alloc = liveAlloc[id] and true or false,
+				attribute = (orig.dn == "Strength" or orig.dn == "Dexterity" or orig.dn == "Intelligence") or nil,
+			})
+		end
+	end
+	table.sort(nodes, function(a, b)
+		local order = { Keystone = 1, Notable = 2, Normal = 3 }
+		if a.type ~= b.type then
+			return order[a.type] < order[b.type]
+		end
+		return a.name < b.name
+	end)
+	reply.result = { jewel = req.jewel, conqueror = conqueror, seed = seed, socket = socketId, nodes = nodes }
+	return reply
+end
+
+-- Crafting simulator (Orbhoarder window): the explicit mod pool of a base at an
+-- item level (spawn weights from PoB's mod data, which comes from the game
+-- files) and the essences that can be used on it. The rolling itself is done
+-- by the overlay.
+local craftTypes = {
+	["Amulet"] = true, ["Belt"] = true, ["Body Armour"] = true, ["Boots"] = true, ["Bow"] = true,
+	["Claw"] = true, ["Dagger"] = true, ["Gloves"] = true, ["Helmet"] = true, ["Jewel"] = true,
+	["One Handed Axe"] = true, ["One Handed Mace"] = true, ["One Handed Sword"] = true, ["Quiver"] = true,
+	["Ring"] = true, ["Sceptre"] = true, ["Shield"] = true, ["Staff"] = true, ["Thrusting One Handed Sword"] = true,
+	["Two Handed Axe"] = true, ["Two Handed Mace"] = true, ["Two Handed Sword"] = true, ["Wand"] = true,
+}
+
+function handlers.craftBases()
+	local bases = { }
+	for name, base in pairs(data.itemBases) do
+		if craftTypes[base.type] and not base.hidden and base.tags and base.tags.default then
+			table.insert(bases, {
+				name = name, type = base.type, subType = base.subType,
+				level = base.req and base.req.level or 1,
+				influences = base.influenceTags and true or false,
+			})
+		end
+	end
+	table.sort(bases, function(a, b)
+		if a.type ~= b.type then
+			return a.type < b.type
+		end
+		return a.name < b.name
+	end)
+	return { bases = bases }
+end
+
+local influenceNames = { "shaper", "elder", "crusader", "eyrie", "basilisk", "adjudicator" }
+
+function handlers.craftMods(req)
+	local base = data.itemBases[req.base or ""]
+	if not base or not craftTypes[base.type] then
+		error("Pick a base type")
+	end
+	local ilvl = math.max(1, math.min(100, tonumber(req.ilvl) or 84))
+	local tags = { }
+	for k, v in pairs(base.tags or { }) do
+		tags[k] = v
+	end
+	local influences = { }
+	for _, inf in ipairs(type(req.influences) == "table" and req.influences or { }) do
+		for _, known in ipairs(influenceNames) do
+			if inf == known and base.influenceTags and base.influenceTags[inf] and #influences < 2 then
+				tags[base.influenceTags[inf]] = true
+				table.insert(influences, inf)
+			end
+		end
+	end
+
+	local mods = { }
+	for id, mod in pairs(data.itemMods.Explicit) do
+		if (mod.type == "Prefix" or mod.type == "Suffix") and (mod.level or 1) <= ilvl and mod.weightKey then
+			local weight = 0
+			for i, key in ipairs(mod.weightKey) do
+				if tags[key] then
+					weight = mod.weightVal[i] or 0
+					break
+				end
+			end
+			for i, key in ipairs(mod.weightMultiplierKey or { }) do
+				if tags[key] then
+					weight = weight * (mod.weightMultiplierVal[i] or 100) / 100
+					break
+				end
+			end
+			if weight > 0 then
+				local lines = { }
+				for _, line in ipairs(mod) do
+					table.insert(lines, line)
+				end
+				table.insert(mods, {
+					id = id, type = mod.type, affix = mod.affix or "", group = mod.group or id,
+					level = mod.level or 1, weight = weight, text = lines, tags = mod.modTags or { },
+				})
+			end
+		end
+	end
+	table.sort(mods, function(a, b) return a.id < b.id end)
+
+	local essences = { }
+	for _, essence in pairs(data.essences) do
+		local modId = essence.mods and essence.mods[base.type]
+		local mod = modId and data.itemMods.Item[modId]
+		if mod and (mod.type == "Prefix" or mod.type == "Suffix") and (mod.level or 1) <= ilvl then
+			local lines = { }
+			for _, line in ipairs(mod) do
+				table.insert(lines, line)
+			end
+			table.insert(essences, {
+				name = essence.name, tier = essence.tier, modId = modId, type = mod.type,
+				group = mod.group or modId, text = lines,
+			})
+		end
+	end
+	table.sort(essences, function(a, b)
+		if a.tier ~= b.tier then
+			return a.tier > b.tier
+		end
+		return a.name < b.name
+	end)
+	return {
+		base = req.base, type = base.type, ilvl = ilvl, influences = influences,
+		maxAffixes = base.type == "Jewel" and 2 or 3,
+		mods = mods, essences = essences,
+	}
 end
 
 function handlers.quit()
