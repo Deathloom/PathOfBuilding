@@ -57,6 +57,10 @@ reqs += [
     ('timeless', {'sockets': True}),
     ('timeless', {'jewel': 'Lethal Pride', 'conqueror': 'Kaom', 'seed': 12345, 'socket': 26725}),
     ('timeless', {'jewel': 'Glorious Vanity', 'conqueror': 'Doryani', 'seed': 4321, 'socket': 26725}),
+    ('timeless', {'jewel': 'Lethal Pride', 'socket': 26725, 'find': 'options'}),
+    ('timeless', {'jewel': 'Glorious Vanity', 'socket': 26725, 'find': 'options'}),
+    ('timeless', {'jewel': 'Lethal Pride', 'socket': 26725, 'find': 'search',
+                  'wants': [{'label': '5% chance to deal Double Damage', 'min': 2}]}),
     ('craftBases', {}),
     ('craftMods', {'base': 'Vaal Regalia', 'ilvl': 86, 'influences': ['shaper']}),
 ]
@@ -87,7 +91,14 @@ CHECKS = {
     'edit': lambda r: 'Smoke loadout' in (r.get('xml') or '') and 'Smoke rename' in (r.get('xml') or '')
                       and (r.get('xml') or '').count('<Spec ') >= 3,
     'timeless': lambda r: len(r.get('jewels') or []) == 6 and (
-        len(r.get('sockets') or []) > 10 or any(
+        len(r.get('sockets') or []) > 10
+        or (len((r.get('options') or {}).get('nodes') or []) > 3
+            and all(n.get('options') for n in r['options']['nodes']))
+        or ((r.get('search') or {}).get('complete', 0) > 0
+            and all(h.get('label') == '5% chance to deal Double Damage'
+                    for s in r['search']['seeds'][:5] for h in s.get('hits') or [])
+            and len(r['search']['seeds'][0].get('hits') or []) >= 2)
+        or any(
             n.get('newName') or n.get('stats') != n.get('before')
             for n in ((r.get('result') or {}).get('nodes') or []) if n.get('type') == 'Notable')),
     'craftBases': lambda r: len(r.get('bases') or []) > 200,

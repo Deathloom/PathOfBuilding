@@ -2017,6 +2017,235 @@ local function nodeStats(node)
 	return stats
 end
 
+-- Timeless jewel seed search (Orbhoarder "Find seeds"): which seeds give the
+-- notables you want around a socket. What a notable turns into depends only on
+-- the jewel type and seed (the conqueror only picks the keystone), so this
+-- reads the same LUTs PassiveSpec uses (data.readLUT) for every seed, without
+-- rebuilding the tree. Outcomes are named by the legion passive's name
+-- (replacements) or its stat lines (additions); rolled values are left out.
+local function additionLabel(addition)
+	local lines = { }
+	for _, line in ipairs(addition.sd or { }) do
+		local clean = stripColours(line):gsub("^%s+", ""):gsub("%s+$", "")
+		if clean ~= "" then
+			table.insert(lines, clean)
+		end
+	end
+	return table.concat(lines, " / ")
+end
+
+local function lutOutcome(legion, jewelType, tbl)
+	local labels = { }
+	local function addNode(index)
+		local ln = legion.nodes[index]
+		if ln and ln.dn then
+			table.insert(labels, ln.dn)
+		end
+	end
+	local function addAddition(id, seen)
+		if seen and seen[id] then
+			return
+		end
+		if seen then
+			seen[id] = true
+		end
+		local add = legion.additions[id + 1]
+		if add then
+			local label = additionLabel(add)
+			if label ~= "" then
+				table.insert(labels, label)
+			end
+		end
+	end
+	if jewelType == 1 then
+		local n = #tbl
+		if n == 2 or n == 3 then
+			addNode(tbl[1] + 1 - data.timelessJewelAdditions)
+		elseif n == 6 or n == 8 then
+			-- same rule as PassiveSpec: might or legacy of the vaal, plus the added stats
+			local bias = 0
+			for i = 1, n / 2 do
+				bias = bias + (tbl[i] <= 21 and 1 or -1)
+			end
+			addNode(bias >= 0 and 77 or 78)
+			local seen = { }
+			for i = 1, n / 2 do
+				addAddition(tbl[i], seen)
+			end
+		end
+	else
+		for _, id in ipairs(tbl) do
+			if id >= data.timelessJewelAdditions then
+				addNode(id + 1 - data.timelessJewelAdditions)
+			else
+				addAddition(id)
+			end
+		end
+	end
+	return labels
+end
+
+local MAX_WANTS = 10
+local MAX_FOUND = 100
+
+local function timelessFind(req, spec, j, reply)
+	local socketId = tonumber(req.socket)
+	local socket = socketId and spec.nodes[socketId]
+	if not socket or socket.type ~= "Socket" or not socket.nodesInRadius then
+		error("Pick a jewel socket")
+	end
+	local legion = spec.tree.legion
+	local liveAlloc = build.spec and build.spec.allocNodes or { }
+	local notables = { }
+	for id in pairs(socket.nodesInRadius[largeRadiusIndex()] or { }) do
+		local orig = spec.tree.nodes[id]
+		if orig and orig.type == "Notable" and not orig.ascendancyName and data.nodeIDList[id] then
+			table.insert(notables, { id = id, name = orig.dn, alloc = liveAlloc[id] and true or false })
+		end
+	end
+	table.sort(notables, function(a, b) return a.name < b.name end)
+	if #notables == 0 then
+		error("No notables in this socket's radius")
+	end
+
+	local step = j.seedStep or 1
+	local seedMin, seedMax = data.timelessJewelSeedMin[j.type], data.timelessJewelSeedMax[j.type]
+	-- outcome labels per notable per seed, cached by LUT entry
+	local cache = { }
+	local function outcomes(seed, nodeId)
+		local tbl = data.readLUT(seed, nodeId, j.type)
+		local key = table.concat(tbl, ",")
+		local labels = cache[key]
+		if not labels then
+			labels = lutOutcome(legion, j.type, tbl)
+			cache[key] = labels
+		end
+		return labels
+	end
+
+	if req.find == "options" then
+		-- every outcome each notable can get, with how many seeds give it
+		local nodes = { }
+		local anywhere = { }
+		for _, n in ipairs(notables) do
+			local counts = { }
+			for s = seedMin, seedMax do
+				for _, label in ipairs(outcomes(s * step, n.id)) do
+					counts[label] = (counts[label] or 0) + 1
+				end
+			end
+			local options = { }
+			for label, seeds in pairs(counts) do
+				table.insert(options, { label = label, seeds = seeds })
+				anywhere[label] = (anywhere[label] or 0) + 1
+			end
+			table.sort(options, function(a, b) return a.label < b.label end)
+			table.insert(nodes, { id = n.id, name = n.name, alloc = n.alloc, options = options })
+		end
+		local labels = { }
+		for label, count in pairs(anywhere) do
+			table.insert(labels, { label = label, nodes = count })
+		end
+		table.sort(labels, function(a, b) return a.label < b.label end)
+		reply.options = { jewel = req.jewel, socket = socketId, nodes = nodes, labels = labels }
+		return reply
+	end
+
+	-- find == "search": wants = { { label, node? , min? } }; node = that notable
+	-- must get it, no node = count the notables in radius that get it (min 1)
+	local wants = { }
+	local byId = { }
+	for _, n in ipairs(notables) do
+		byId[n.id] = n
+	end
+	for _, w in ipairs(type(req.wants) == "table" and req.wants or { }) do
+		if #wants >= MAX_WANTS then
+			break
+		end
+		local label = type(w) == "table" and type(w.label) == "string" and w.label or nil
+		local node = type(w) == "table" and tonumber(w.node) or nil
+		if label and label ~= "" and (not node or byId[node]) then
+			local min = math.max(1, math.min(tonumber(w.min) or 1, #notables))
+			table.insert(wants, { label = label, node = node, min = math.floor(min) })
+		end
+	end
+	if #wants == 0 then
+		error("Pick at least one passive or stat you want")
+	end
+
+	local found = { }
+	local complete = 0
+	for s = seedMin, seedMax do
+		local seed = s * step
+		local have = { }
+		for _, n in ipairs(notables) do
+			local labels = outcomes(seed, n.id)
+			local set = { }
+			for _, label in ipairs(labels) do
+				set[label] = true
+			end
+			have[n.id] = set
+		end
+		local score, done = 0, 0
+		for _, w in ipairs(wants) do
+			if w.node then
+				if have[w.node][w.label] then
+					score = score + 1
+					done = done + 1
+				end
+			else
+				local count = 0
+				for _, n in ipairs(notables) do
+					if have[n.id][w.label] then
+						count = count + 1
+					end
+				end
+				score = score + count
+				if count >= w.min then
+					done = done + 1
+				end
+			end
+		end
+		if score > 0 then
+			local all = done == #wants
+			if all then
+				complete = complete + 1
+			end
+			table.insert(found, { seed = seed, score = score, met = done, all = all })
+		end
+	end
+	table.sort(found, function(a, b)
+		if a.met ~= b.met then
+			return a.met > b.met
+		end
+		if a.score ~= b.score then
+			return a.score > b.score
+		end
+		return a.seed < b.seed
+	end)
+	local seeds = { }
+	for i = 1, math.min(#found, MAX_FOUND) do
+		local f = found[i]
+		local hits = { }
+		for _, n in ipairs(notables) do
+			for _, label in ipairs(outcomes(f.seed, n.id)) do
+				for _, w in ipairs(wants) do
+					if w.label == label and (not w.node or w.node == n.id) then
+						table.insert(hits, { node = n.id, name = n.name, label = label, alloc = n.alloc })
+						break
+					end
+				end
+			end
+		end
+		table.insert(seeds, { seed = f.seed, score = f.score, met = f.met, all = f.all, hits = hits })
+	end
+	reply.search = {
+		jewel = req.jewel, socket = socketId, wants = #wants, complete = complete,
+		total = seedMax - seedMin + 1, seeds = seeds,
+	}
+	return reply
+end
+
 function handlers.timeless(req)
 	if not loaded then
 		error("No build loaded")
@@ -2044,6 +2273,9 @@ function handlers.timeless(req)
 	local j = timelessJewels[req.jewel]
 	if not j then
 		error("Unknown timeless jewel: " .. tostring(req.jewel))
+	end
+	if req.find == "options" or req.find == "search" then
+		return timelessFind(req, spec, j, reply)
 	end
 	local conqueror
 	for _, c in ipairs(j.conquerors) do
