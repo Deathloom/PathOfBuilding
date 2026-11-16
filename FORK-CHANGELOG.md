@@ -6,6 +6,9 @@ Changes in this fork compared with [Path of Building Community](https://github.c
 
 ## [Unreleased]
 
+### Changed
+- **Upstream dev merged for league 3.30 (Covens):** 3.30 and 3.30 Ruthless passive trees, 3.30 uniques, Wickerman equipment, Wickerman Viscera mods, Polaric Devastation, 3.30 flask mods (Pathfinder, Regenerative Runes), regenerated trade data and 3.30 item paste fixes. Upstream has no 3.30 release yet, so this takes their dev branch up to 17f49335.
+
 ### Fixed
 - **Levelling plan: masteries only after a notable of their cluster.** A mastery was put right after the first passive of its group (or first in the list if a small passive of the group was already taken), so Loot Goblin's next-5 asked for a mastery the game wouldn't let you allocate yet. Now it waits for a notable of that group, as the game requires.
 
