@@ -87,7 +87,7 @@ CHECKS = {
     'edit': lambda r: 'Smoke loadout' in (r.get('xml') or '') and 'Smoke rename' in (r.get('xml') or '')
                       and (r.get('xml') or '').count('<Spec ') >= 3,
     'timeless': lambda r: len(r.get('jewels') or []) == 6 and (
-        len(r.get('sockets') or []) > 20 or any(
+        len(r.get('sockets') or []) > 10 or any(
             n.get('newName') or n.get('stats') != n.get('before')
             for n in ((r.get('result') or {}).get('nodes') or []) if n.get('type') == 'Notable')),
     'craftBases': lambda r: len(r.get('bases') or []) > 200,

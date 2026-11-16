@@ -61,6 +61,68 @@ dofile("HeadlessWrapper.lua")
 
 local dkjson = require("dkjson")
 
+-- The headless wrapper's Inflate is a stub (returns ""), which leaves the
+-- timeless jewel tables empty. Inflate with zlib through LuaJIT's FFI instead
+-- (runtime\zlib1.dll on Windows, libz elsewhere); the stub stays if that fails.
+do
+	local okFfi, ffi = pcall(require, "ffi")
+	local zlib
+	if okFfi then
+		pcall(ffi.cdef, [[
+			typedef struct pob_z_stream {
+				const unsigned char *next_in; unsigned int avail_in; unsigned long total_in;
+				unsigned char *next_out; unsigned int avail_out; unsigned long total_out;
+				const char *msg; void *state; void *zalloc; void *zfree; void *opaque;
+				int data_type; unsigned long adler; unsigned long reserved;
+			} pob_z_stream;
+			const char *zlibVersion(void);
+			int inflateInit2_(pob_z_stream *strm, int windowBits, const char *version, int stream_size);
+			int inflate(pob_z_stream *strm, int flush);
+			int inflateEnd(pob_z_stream *strm);
+		]])
+		for _, name in ipairs({ "zlib1", "z", "libz.so.1" }) do
+			local okLoad, lib = pcall(ffi.load, name)
+			if okLoad then
+				zlib = lib
+				break
+			end
+		end
+	end
+	if zlib then
+		local CHUNK = 4 * 1024 * 1024
+		Inflate = function(data)
+			if type(data) ~= "string" or data == "" then
+				return nil
+			end
+			local strm = ffi.new("pob_z_stream[1]")
+			-- 15 + 32: zlib or gzip header, detected automatically (as SimpleGraphic does)
+			if zlib.inflateInit2_(strm, 15 + 32, zlib.zlibVersion(), ffi.sizeof("pob_z_stream")) ~= 0 then
+				return nil
+			end
+			local input = ffi.cast("const unsigned char *", data)
+			strm[0].next_in = input
+			strm[0].avail_in = #data
+			local out = ffi.new("unsigned char[?]", CHUNK)
+			local parts = { }
+			local ret
+			repeat
+				strm[0].next_out = out
+				strm[0].avail_out = CHUNK
+				ret = zlib.inflate(strm, 0)
+				if ret ~= 0 and ret ~= 1 then
+					zlib.inflateEnd(strm)
+					return nil
+				end
+				table.insert(parts, ffi.string(out, CHUNK - strm[0].avail_out))
+			until ret == 1 or strm[0].avail_in == 0 and strm[0].avail_out ~= 0
+			zlib.inflateEnd(strm)
+			return table.concat(parts)
+		end
+	else
+		logErr("zlib not found: timeless jewel data can't be read")
+	end
+end
+
 local function send(tbl)
 	realStdout:write("@pob ", dkjson.encode(tbl), "\n")
 	realStdout:flush()
@@ -1921,7 +1983,7 @@ local function radiusSockets(spec)
 	local sockets = { }
 	local large = largeRadiusIndex()
 	for id, node in pairs(spec.nodes) do
-		if node.type == "Socket" and not node.expansionJewel and type(id) == "number" and id < 65536 and node.nodesInRadius then
+		if node.type == "Socket" and not (node.expansionJewel and node.expansionJewel.parent) and type(id) == "number" and id < 65536 and node.nodesInRadius then
 			local inRadius = node.nodesInRadius[large] or { }
 			local keystone
 			local notables = { }
