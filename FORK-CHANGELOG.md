@@ -6,6 +6,9 @@ Changes in this fork compared with [Path of Building Community](https://github.c
 
 ## [Unreleased]
 
+### Added
+- **Timeless jewel seed search** (headless `timeless` with `find`): `find: "options"` lists every outcome each notable in a socket's radius can get with that jewel (legion passive name or added stat line) and how many seeds give it; `find: "search"` with `wants` (an outcome, on one notable or anywhere in radius with a minimum count) returns the best 100 seeds and what they hit. Reads the jewel LUTs directly for every seed (conqueror only changes the keystone), so the tree isn't rebuilt. Smoke test covers both.
+
 ### Changed
 - **Upstream dev merged for league 3.30 (Covens):** 3.30 and 3.30 Ruthless passive trees, 3.30 uniques, Wickerman equipment, Wickerman Viscera mods, Polaric Devastation, 3.30 flask mods (Pathfinder, Regenerative Runes), regenerated trade data and 3.30 item paste fixes. Upstream has no 3.30 release yet, so this takes their dev branch up to 17f49335.
 
