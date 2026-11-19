@@ -20,6 +20,8 @@
 --   {"id":4,"cmd":"info"}
 --   {"id":5,"cmd":"equipped","items":[...],"passives":{...},"skills":true,"character":{...}}
 --   {"id":6,"cmd":"clearEquipped"}
+--   {"id":5,"cmd":"equipped","file":"<your character's build file>.xml"}
+--                               (Deathloom fork: gear from the file PoB's own Import character saved)
 --   {"id":7,"cmd":"gear"}       (the build's items: slot, mods, game-format text)
 --   {"id":8,"cmd":"loadouts"}   (trees, item sets, skill sets, PoB's named loadouts)
 --   {"id":9,"cmd":"setLoadout","named":"..."} or {...,"spec":n,"itemSet":n,"skillSet":n}
@@ -515,9 +517,118 @@ local function chooseLiveMainSkill()
 	return mainSkill and mainSkill.activeEffect and mainSkill.activeEffect.grantedEffect.name or nil, found ~= nil
 end
 
+-- Deathloom fork (Orbhoarder, 19 Nov 2026): your character's gear from a build file that
+-- PoB's own Import character filled ("My characters/<name>.xml"). Items of the file's
+-- active item set; the build's tree, tree jewels and gems are used.
+local function readGearFile(path)
+	local text, err = readFile(path)
+	if not text then
+		error("Can't read your character file: " .. tostring(err), 0)
+	end
+	local root, perr = common.xml.ParseXML(text)
+	local pob = root and root[1]
+	if type(pob) ~= "table" or pob.elem ~= "PathOfBuilding" then
+		error("Your character file isn't a Path of Building build" .. (perr and (": " .. tostring(perr)) or ""), 0)
+	end
+	local itemsNode, buildNode
+	for _, node in ipairs(pob) do
+		if type(node) == "table" then
+			if node.elem == "Items" then
+				itemsNode = node
+			elseif node.elem == "Build" then
+				buildNode = node
+			end
+		end
+	end
+	local gear = { items = { }, slots = { }, attrib = { } }
+	if buildNode then
+		gear.level = tonumber(buildNode.attrib.level)
+		gear.class = buildNode.attrib.className
+		gear.ascendancy = buildNode.attrib.ascendClassName
+	end
+	if not itemsNode then
+		return gear
+	end
+	local sets, firstSet = { }, nil
+	for _, node in ipairs(itemsNode) do
+		if type(node) == "table" then
+			local id = tonumber(node.attrib.id)
+			if node.elem == "Item" and id then
+				for _, child in ipairs(node) do
+					if type(child) == "string" then
+						gear.items[id] = child
+					end
+				end
+				gear.attrib[id] = node.attrib
+			elseif node.elem == "ItemSet" and id then
+				sets[id] = node
+				firstSet = firstSet or node
+			end
+		end
+	end
+	local set = sets[tonumber(itemsNode.attrib.activeItemSet) or 1] or firstSet
+	if set then
+		gear.useSecondWeaponSet = set.attrib.useSecondWeaponSet == "true"
+		for _, child in ipairs(set) do
+			local itemId = type(child) == "table" and child.elem == "Slot" and tonumber(child.attrib.itemId)
+			if itemId and itemId > 0 and gear.items[itemId] then
+				table.insert(gear.slots, { name = child.attrib.name or "", id = itemId })
+			end
+		end
+	end
+	return gear
+end
+
+local function importFileGear(gear)
+	local itemsTab = build.itemsTab
+	local imported, skipped = 0, { }
+	for index, slotInfo in ipairs(gear.slots) do
+		local raw = gear.items[slotInfo.id]
+		local slot = itemsTab.slots[slotInfo.name]
+		local ok, err = pcall(function()
+			if not slot then
+				error("no slot " .. slotInfo.name)
+			end
+			local item = new("Item"):Item(raw)
+			local attrib = gear.attrib[slotInfo.id] or { }
+			for _, key in ipairs({ "variant", "variantAlt", "variantAlt2", "variantAlt3", "variantAlt4", "variantAlt5" }) do
+				if attrib[key] then
+					item[key] = tonumber(attrib[key])
+				end
+			end
+			if not item.base then
+				error("unknown item base")
+			end
+			-- marks it as ours, so removeLive deletes it again
+			item.uniqueID = LIVE_PREFIX .. "file:" .. index
+			item:BuildModList()
+			itemsTab:AddItem(item, true)
+			slot:SetSelItemId(item.id)
+		end)
+		if ok then
+			imported = imported + 1
+		else
+			logErr("Character file item in " .. tostring(slotInfo.name) .. " failed: " .. tostring(err))
+			table.insert(skipped, slotInfo.name)
+		end
+	end
+	if gear.useSecondWeaponSet then
+		itemsTab.activeItemSet.useSecondWeaponSet = true
+	end
+	return imported, skipped
+end
+
 local function importEquipped(req)
 	if not loaded then
 		error("No build loaded")
+	end
+	local fileGear
+	if type(req.file) == "string" then
+		fileGear = readGearFile(req.file)
+		if not fileGear.slots[1] then
+			error("No gear in your character file yet: import your character's Items and Skills in Path of Building and save.", 0)
+		end
+		req = { items = { }, character = { name = req.name, class = fileGear.class, level = fileGear.level } }
 	end
 	if type(req.items) ~= "table" then
 		error("equipped needs 'items' (the character's equipped items)")
@@ -568,6 +679,10 @@ local function importEquipped(req)
 	end
 
 	local imported, skipped = 0, { }
+	if fileGear then
+		imported, skipped = importFileGear(fileGear)
+		info.fromFile = true
+	end
 	for index, itemData in ipairs(req.items) do
 		if type(itemData) == "table" and not skipInventory[itemData.inventoryId] then
 			local before = 0
