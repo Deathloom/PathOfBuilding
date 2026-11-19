@@ -52,6 +52,13 @@ for b in BUILDS:
             {'op': 'group', 'skillSet': 1, 'group': 1, 'enabled': True},
         ]}),
     ]
+# Orbhoarder price check "vs character": gear from a character file (here: another build's file)
+reqs += [
+    ('load', {'path': path_for(BUILDS[0])}),
+    ('equipped', {'file': path_for(BUILDS[1]), 'name': 'Smoke'}, 'equippedFile'),
+    ('impact', {'item': RING}, 'impactLive'),
+    ('clearEquipped', {}),
+]
 # Orbhoarder window: timeless jewel explorer + crafting simulator (last build stays loaded)
 reqs += [
     ('timeless', {'sockets': True}),
@@ -65,7 +72,7 @@ reqs += [
     ('craftMods', {'base': 'Vaal Regalia', 'ilvl': 86, 'influences': ['shaper']}),
 ]
 reqs.append(('quit', {}))
-stdin = ''.join(json.dumps({'id': i + 1, 'cmd': c, **p}) + '\n' for i, (c, p) in enumerate(reqs))
+stdin = ''.join(json.dumps({'id': i + 1, 'cmd': r[0], **r[1]}) + '\n' for i, r in enumerate(reqs))
 proc = subprocess.run(cmd, cwd=SRC, input=stdin, capture_output=True, text=True, encoding='utf-8', errors='replace', env=env, timeout=900)
 
 replies = {}
@@ -101,13 +108,16 @@ CHECKS = {
         or any(
             n.get('newName') or n.get('stats') != n.get('before')
             for n in ((r.get('result') or {}).get('nodes') or []) if n.get('type') == 'Notable')),
+    'equippedFile': lambda r: (r.get('equipped') or {}).get('fromFile') is True and (r['equipped'].get('items') or 0) >= 5,
+    'impactLive': lambda r: nonempty(r.get('compares')) and nonempty((r.get('equipped') or {}).get('compares')),
     'craftBases': lambda r: len(r.get('bases') or []) > 200,
     'craftMods': lambda r: len(r.get('mods') or []) > 50 and r.get('influences') == ['shaper'],
     'plan': lambda r: nonempty(r.get('order')) and nonempty(r.get('phases')) and r.get('available') == 28 and isinstance(r.get('keptIds'), (list, dict)) and r.get('bandit') in ('None', 'Oak', 'Kraityn', 'Alira'),
 }
 
 failed = 0
-for i, (c, _) in enumerate(reqs):
+for i, req in enumerate(reqs):
+    c = req[2] if len(req) > 2 else req[0]
     r = replies.get(i + 1)
     if r is None:
         print(f'FAIL {c}: no reply'); failed += 1; continue

@@ -7,6 +7,7 @@ Changes in this fork compared with [Path of Building Community](https://github.c
 ## [Unreleased]
 
 ### Added
+- **Headless `equipped` from a character file** (`{"file": "<path>.xml"}`): takes the gear of the file's active item set (the file PoB's own Import character filled) into the hidden live loadout, so `impact` answers "vs character" again without Orbhoarder calling GGG's character pages. The build's tree, tree jewels and gems are used. Smoke test covers it.
 - **Open a build on the Import tab for Orbhoarder** ("Update in PoB"): `--orbhoarder-import "<build>.xml"` at start, or, while PoB is running, a path written to `runtime/orbhoarder-open.txt` (checked once a second, then deleted, so no second PoB window). Unsaved changes get the usual save question first. Only the tab is opened: the player still starts the character import.
 - **Timeless jewel seed search** (headless `timeless` with `find`): `find: "options"` lists every outcome each notable in a socket's radius can get with that jewel (legion passive name or added stat line) and how many seeds give it; `find: "search"` with `wants` (an outcome, on one notable or anywhere in radius with a minimum count) returns the best 100 seeds and what they hit. Reads the jewel LUTs directly for every seed (conqueror only changes the keystone), so the tree isn't rebuilt. Smoke test covers both.
 
