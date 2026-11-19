@@ -1418,11 +1418,21 @@ You should create a backup copy of the build before proceeding.
 	main:OpenPopup(580, 200, "Game Version", controls, "convert", nil, "cancel")
 end
 
+-- Deathloom fork: after the save question, open the file Orbhoarder asked for
+function buildMode:OrbhoarderContinue()
+	local p = self.orbhoarderPending
+	self.orbhoarderPending = nil
+	if p then
+		main:OrbhoarderLoad(p)
+	end
+end
+
 function buildMode:OpenSavePopup(mode)
 	local modeDesc = {
 		["LIST"] = "now?",
 		["EXIT"] = "before exiting?",
 		["UPDATE"] = "before updating?",
+		["ORBHOARDER"] = "before Orbhoarder opens your character's file?", -- Deathloom fork
 	}
 	local controls = { }
 	controls.label = new("LabelControl"):LabelControl(nil, {0, 20, 0, 16}, "^7This build has unsaved changes.\nDo you want to save them "..modeDesc[mode])
@@ -1439,10 +1449,13 @@ function buildMode:OpenSavePopup(mode)
 			Exit()
 		elseif mode == "UPDATE" then
 			launch:ApplyUpdate(launch.updateAvailable)
+		elseif mode == "ORBHOARDER" then
+			self:OrbhoarderContinue()
 		end
 	end)
 	controls.close = new("ButtonControl"):ButtonControl(nil, {90, 70, 80, 20}, "Cancel", function()
 		main:ClosePopup()
+		self.orbhoarderPending = nil
 	end)
 	main:OpenPopup(300, 100, "Save Changes", controls)
 end
@@ -2326,6 +2339,8 @@ function buildMode:SaveDBFile()
 
 	if action == "LIST" then
 		self:CloseBuild()
+	elseif action == "ORBHOARDER" then
+		self:OrbhoarderContinue()
 	elseif action == "EXIT" then
 		Exit()
 	elseif action == "UPDATE" then

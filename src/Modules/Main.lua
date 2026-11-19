@@ -68,6 +68,15 @@ function main:Init()
 	self.gameAccounts = { }
 
 	local ignoreBuild
+	-- Deathloom fork (Orbhoarder "Update in PoB"): --orbhoarder-import "<build>.xml" opens that
+	-- build on the Import tab (picked up in OnFrame, once the build folder is known)
+	if arg[1] == "--orbhoarder-import" then
+		self.orbhoarderOpenPath = arg[2]
+		arg[1] = nil
+		arg[2] = nil
+		ignoreBuild = true
+		self:SetMode("BUILD", false, "Unnamed build")
+	end
 	if arg[1] then
 		local importLink = buildSites.ParseImportLinkFromURI(arg[1])
 		buildSites.DownloadBuild(arg[1], nil, function(isSuccess, data, importLink)
@@ -400,6 +409,7 @@ function main:OnFrame()
 	else
 		self.portraitMode = false
 	end
+	self:OrbhoarderPoll()
 	while self.newMode do
 		if self.mode then
 			self:CallMode("Shutdown")
@@ -411,6 +421,12 @@ function main:OnFrame()
 			self.modes[self.mode].viewMode = "TREE"
 		end
 		self.newModeChangeToTree = false
+		-- Deathloom fork: Orbhoarder asked for the Import tab. Only the tab: the player
+		-- starts the character import themselves (Orbhoarder never fetches character data).
+		if self.newModeOpenImport and self.mode == "BUILD" then
+			self.modes[self.mode].viewMode = "IMPORT"
+		end
+		self.newModeOpenImport = false
 	end
 
 	self.viewPort = { x = 0, y = 0, width = self.screenW, height = self.screenH }
@@ -525,6 +541,73 @@ function main:SetMode(newMode, ...)
 	self.newMode = newMode
 	self.newModeArgs = {...}
 	self.predefinedBuildName = nil
+end
+
+-- Deathloom fork (Orbhoarder "Update in PoB"): open a build file on the Import tab.
+-- At start: --orbhoarder-import "<path>". While running: Orbhoarder writes the path to
+-- runtime/orbhoarder-open.txt; checked once a second, then deleted.
+function main:OrbhoarderPoll()
+	if self.orbhoarderOpenPath then
+		local p = self.orbhoarderOpenPath
+		self.orbhoarderOpenPath = nil
+		self:OrbhoarderOpenBuild(p)
+		return
+	end
+	local now = GetTime()
+	if self.orbhoarderPollAt and now - self.orbhoarderPollAt < 1000 then
+		return
+	end
+	self.orbhoarderPollAt = now
+	local file = GetRuntimePath().."/orbhoarder-open.txt"
+	local f = io.open(file, "r")
+	if not f then
+		return
+	end
+	local p = f:read("*l")
+	f:close()
+	os.remove(file)
+	self:OrbhoarderOpenBuild(p)
+end
+
+function main:OrbhoarderOpenBuild(p)
+	if type(p) ~= "string" or not self.buildPath then
+		return
+	end
+	p = p:gsub("^%s+", ""):gsub("%s+$", ""):gsub("\\", "/")
+	if not p:lower():match("%.xml$") then
+		return
+	end
+	local f = io.open(p, "r")
+	if not f then
+		return
+	end
+	f:close()
+	-- inside the build folder: spell it the way PoB does, so the sub-folder shows right
+	local root = self.buildPath:gsub("\\", "/")
+	if p:sub(1, #root):lower() == root:lower() then
+		p = self.buildPath..p:sub(#root + 1)
+	end
+	local build = self.modes["BUILD"]
+	if self.mode == "BUILD" and build.dbFileName and build.dbFileName:gsub("\\", "/"):lower() == p:gsub("\\", "/"):lower() and not build.unsaved then
+		-- already open: reload it from the file (Orbhoarder may have just made it)
+		self:OrbhoarderLoad(p)
+		return
+	end
+	if self.mode == "BUILD" and build.unsaved then
+		build.orbhoarderPending = p
+		build:OpenSavePopup("ORBHOARDER")
+		return
+	end
+	self:OrbhoarderLoad(p)
+end
+
+function main:OrbhoarderLoad(p)
+	local name = p:match("([^/]+)%.[xX][mM][lL]$") or "Build"
+	self:SetMode("BUILD", p, name)
+	self.newModeOpenImport = true
+	if SetForeground then
+		SetForeground()
+	end
 end
 
 function main:CallMode(func, ...)
