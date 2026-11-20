@@ -577,11 +577,21 @@ function main:OrbhoarderOpenBuild(p)
 	if not p:lower():match("%.xml$") then
 		return
 	end
+	-- a local drive path only: no network shares (//server/share makes Windows try a
+	-- sign-in to that server) or device paths (//./, //?/)
+	if p:sub(1, 2) == "//" or not p:match("^%a:/") then
+		return
+	end
+	-- only Path of Building build files
 	local f = io.open(p, "r")
 	if not f then
 		return
 	end
+	local head = f:read(4096) or ""
 	f:close()
+	if not head:find("<PathOfBuilding", 1, true) then
+		return
+	end
 	-- inside the build folder: spell it the way PoB does, so the sub-folder shows right
 	local root = self.buildPath:gsub("\\", "/")
 	if p:sub(1, #root):lower() == root:lower() then
