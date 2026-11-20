@@ -1518,26 +1518,52 @@ local function allocationOrder(spec, haveIds)
 		end
 	end
 	local order = { }
+	-- Deathloom fork (Gerhard 20 Nov 2026: the order hopped between branches): the last
+	-- passive added; a next target that grows from near it costs less than one on the
+	-- far side of the tree (up to 1.5 extra steps), so a branch is usually finished first
+	local last
+	local function linksOf(id)
+		local node = spec.nodes[id] or spec.allocNodes[id]
+		return node and node.linked or { }
+	end
 	while left > 0 do
+		-- how far each passive we have is from the last one added (through passives we have)
+		local near = { }
+		if last then
+			near[last] = 0
+			local q, h = { last }, 1
+			while q[h] do
+				local id = q[h]
+				h = h + 1
+				for _, other in ipairs(linksOf(id)) do
+					if have[other.id] and near[other.id] == nil then
+						near[other.id] = near[id] + 1
+						table.insert(q, other.id)
+					end
+				end
+			end
+		end
 		-- BFS over the target tree from everything we have
-		local dist, parent, queue, head = { }, { }, { }, 1
+		local dist, parent, root, queue, head = { }, { }, { }, { }, 1
 		for id in pairs(have) do
 			dist[id] = 0
+			root[id] = id
 			table.insert(queue, id)
 		end
 		local best, bestScore
 		while queue[head] do
 			local id = queue[head]
 			head = head + 1
-			local node = spec.nodes[id] or spec.allocNodes[id]
-			for _, other in ipairs(node and node.linked or { }) do
+			for _, other in ipairs(linksOf(id)) do
 				local oid = other.id
 				if remaining[oid] and dist[oid] == nil then
 					dist[oid] = dist[id] + 1
 					parent[oid] = id
+					root[oid] = root[id]
 					table.insert(queue, oid)
 					local rank = planKindRank[other.type] or 9
-					local score = dist[oid] * 10 + rank
+					local away = last and math.min(near[root[oid]] or 15, 15) or 0
+					local score = dist[oid] * 10 + rank + away
 					if rank < 9 and (not bestScore or score < bestScore) then
 						best, bestScore = oid, score
 					end
@@ -1567,6 +1593,7 @@ local function allocationOrder(spec, haveIds)
 			left = left - 1
 			table.insert(order, spec.allocNodes[pid])
 		end
+		last = best
 	end
 	-- unreachable leftovers keep a stable order
 	local rest = { }
