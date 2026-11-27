@@ -8,6 +8,7 @@
 	<File name="changelog.txt" part="default" sha1="be166143d933258e40f359acef8d63cef6a6258c" />
 	<File name="help.txt" part="default" sha1="e486cb63a78f5ca355430b67fa23e02fd30f5771" />
 	<File name="LICENSE.md" part="default" sha1="c77635aa1ba0a2ffe8eb72f93b3376e3a3d2041a" />
+	<File name="_SimpleGraphic.def.lua" part="program" sha1="f107f8c666b71d48deaa4c46021b61b602e7f7f5" />
 	<File name="Assets/ascendancypassiveheaderleft.png" part="program" sha1="6a65683dcc3b14382dc083198fe9361454e91b15" />
 	<File name="Assets/ascendancypassiveheadermiddle.png" part="program" sha1="79ccf100c4154d8f65544e2b32d44a612b7007c0" />
 	<File name="Assets/ascendancypassiveheaderright.png" part="program" sha1="dbb86c1b8b51019379e52cd1f8b2a9edee07a3f6" />
@@ -397,14 +398,20 @@
 	<File name="Data/Viscera.lua" part="program" sha1="af650d1906bbd6191e09952395570184edf5b650" />
 	<File name="Data/WorldAreas.lua" part="program" sha1="7e859b5a2146b115b8fca3aa8a3b3d0d06096a2f" />
 	<File name="GameVersions.lua" part="program" sha1="a476a52da1bf25bbb6978bee2b92dd1d5a3047c4" />
-	<File name="Launch.lua" part="program" sha1="08bb3ec56a37dedc6ea8334d82bcb124e425ca09" />
+	<File name="HeadlessWrapper.lua" part="program" sha1="80b670d44e3bf055757d3d84ff770b48b7afa21a" />
+	<File name="ImpactServer.lua" part="program" sha1="c724d93a8ce2782218ecce202bbcd6c2a4c80046" />
+	<File name="Launch.lua" part="program" sha1="c92202f6787d82896c552f5841aa7a6791646003" />
 	<File name="LaunchServer.lua" part="program" sha1="f15bdfbedaf887e19556490dce49b720f8365379" />
 	<File name="Modules/AddImplicitPopup.lua" part="program" sha1="f68d391d10b95c0feef70b7e8e82326a745dcb3b" />
-	<File name="Modules/Build.lua" part="program" sha1="4bd82f220d5e69e1658e2d8605a3595db2fb624b" />
+	<File name="Modules/Build.lua" part="program" sha1="85041d87f090ca7ee4dbbc6455daea3188cf384b" />
 	<File name="Modules/BuildDisplayStats.lua" part="program" sha1="ffc4da3b13c3d50f3580b452622429f0bd7e70ab" />
-	<File name="Modules/BuildList.lua" part="program" sha1="daa0c88f606ade9687f037b6e99c9cec2904200e" />
+	<File name="Modules/BuildList.lua" part="program" sha1="6e7b5893ed05972df1a0a9ba782c908dd75d7431" />
 	<File name="Modules/BuildListHelpers.lua" part="program" sha1="a95770f18b54c05ed1d68f870f3693cac53a0fab" />
 	<File name="Modules/BuildSiteTools.lua" part="program" sha1="1338f63cefd36a330f49b1725f771156d4ba1c93" />
+	<File name="Modules/BuildSync.lua" part="program" sha1="5116b75b61bb11f5ed649dd768337f5115bc2fdb" />
+	<File name="Modules/BuildSyncAuth.lua" part="program" sha1="e57cba01f6e8ddbb0a3c2595995d02408f216d29" />
+	<File name="Modules/BuildSyncCore.lua" part="program" sha1="4fc8c9be6ce840e96bdf8dd670063d3488c3d109" />
+	<File name="Modules/BuildSyncWorker.lua" part="program" sha1="fa77c253350a4653c03662260908494b56959ad3" />
 	<File name="Modules/CalcActiveSkill.lua" part="program" sha1="90154b50b9192e7ae8433cf04655902725686a1f" />
 	<File name="Modules/CalcBase.lua" part="program" sha1="d4b5f492c68c8600aedfdcb5efdc44e6ac885c6e" />
 	<File name="Modules/CalcBreakdown.lua" part="program" sha1="ac9a792c343623799b7005cb4142b76adce2a27f" />
@@ -428,13 +435,14 @@
 	<File name="Modules/DataLegionLookUpTableHelper.lua" part="program" sha1="40ed81537142296d67827de9f25930f2daac8ccf" />
 	<File name="Modules/ItemSlotHelper.lua" part="program" sha1="4b7d441f9ade5d57c413aa1f8f8067b654cfb927" />
 	<File name="Modules/ItemTools.lua" part="program" sha1="754bbbed69c10706aa403446433c3741e21c4556" />
-	<File name="Modules/Main.lua" part="program" sha1="5446a99b542208f50c7f36602899d1ad080c80b4" />
+	<File name="Modules/Main.lua" part="program" sha1="7e7da3c6b8f79e1590fcbf0ff14271910d307851" />
 	<File name="Modules/ModParser.lua" part="program" sha1="11f40171aa26c1e7ff5e41ce5c807bab02de0901" />
 	<File name="Modules/ModTools.lua" part="program" sha1="c987491da4021b5bdc4744b5eec84fb5995284cf" />
 	<File name="Modules/PantheonTools.lua" part="program" sha1="ebe91a7d8f8444a6061acf4758da0e775cc8c314" />
 	<File name="Modules/StatDescriber.lua" part="program" sha1="05f5a888f3d88c63920dde8e46500e102eef7025" />
 	<File name="Modules/ToastNotification.lua" part="program" sha1="87abe18f2c81a8df77e7e79248730e81ca5e03c5" />
 	<File name="Modules/Utils.lua" part="program" sha1="7fcb8936ef089aa9472d69920e206afe7cecf3c8" />
+	<File name="SyncServer.lua" part="program" sha1="6abc73b6d55feebb66ee5a8d0633c3186b567783" />
 	<File name="UpdateApply.lua" part="program" sha1="d7e47a29feff219c1ec3c6e4a19eb85b47691c26" />
 	<File name="UpdateCheck.lua" part="program" sha1="2f3861b4e89838150f16e4e09eb6012b0800fa68" />
 	<File name="abseil_dll.dll" part="runtime" runtime="win32" sha1="e9c19e2bce146c5b41f71bb1e367ca055a10a94e" />
@@ -467,6 +475,7 @@
 	<File name="msvcp140_atomic_wait.dll" part="runtime" runtime="win32" sha1="8544021005709c682ce4d2430fba88aff0fc7eb3" />
 	<File name="msvcp140_codecvt_ids.dll" part="runtime" runtime="win32" sha1="3bb5afd909c5271088a223191f38ca916c7d81f0" />
 	<File name="Path{space}of{space}Building.exe" part="runtime" runtime="win32" sha1="8dcd46aac0b70d0a4d5eac5c7244302c9b805f85" />
+	<File name="PoBHeadless.exe" part="runtime" runtime="win32" sha1="26e28464bcf7074cf6f2466471bf9e5524f61b13" />
 	<File name="re2.dll" part="runtime" runtime="win32" sha1="4263cf948808108de40e7b6fb522b349cafaabcf" />
 	<File name="SimpleGraphic.dll" part="runtime" runtime="win32" sha1="9d823db1e01eb8fde7f5118e351da609be4ed679" />
 	<File name="SimpleGraphic/Fonts/Bitstream Vera Sans Mono.10.tga" part="runtime" sha1="12e59115634000273611ef08b0d1b130ea95d4a7" />
