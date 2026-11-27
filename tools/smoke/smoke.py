@@ -76,11 +76,14 @@ stdin = ''.join(json.dumps({'id': i + 1, 'cmd': r[0], **r[1]}) + '\n' for i, r i
 proc = subprocess.run(cmd, cwd=SRC, input=stdin, capture_output=True, text=True, encoding='utf-8', errors='replace', env=env, timeout=900)
 
 replies = {}
+ready = None
 for line in proc.stdout.splitlines():
     if line.startswith('@pob '):
         r = json.loads(line[5:])
         if r.get('id'):
             replies[r['id']] = r
+        elif r.get('ready'):
+            ready = r
 
 def nonempty(v):
     return bool(v) and v != {}
@@ -116,6 +119,13 @@ CHECKS = {
 }
 
 failed = 0
+# Orbhoarder reads caps from the ready line (S6): every command it sends must be listed
+caps = (ready or {}).get('caps') or []
+missing = sorted({r[0] for r in reqs} - set(caps)) + [f for f in ('equipped.file', 'timeless.find') if f not in caps]
+if not ready or ready.get('fork') != 'deathloom' or ready.get('protocol') != 1 or missing:
+    print(f'FAIL ready: caps missing {missing} or no fork/protocol: {json.dumps(ready)[:300]}'); failed += 1
+else:
+    print(f'ok   ready ({len(caps)} caps)')
 for i, req in enumerate(reqs):
     c = req[2] if len(req) > 2 else req[0]
     r = replies.get(i + 1)
