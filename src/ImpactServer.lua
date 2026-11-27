@@ -35,6 +35,9 @@
 --                               (crafting simulator: mod pool with spawn weights + essences)
 --   {"id":11,"cmd":"quit"}
 --
+-- At start: {"id":0,"ok":true,"ready":true,"version":"2.68.1","fork":"deathloom","protocol":1,
+--            "caps":["craftBases",...,"equipped.file",...,"timeless.find","tree","treeMap"]}
+--
 -- Replies: {"id":n,"ok":true,...} or {"id":n,"ok":false,"error":"..."}
 --
 -- Live character: "equipped" takes what the public Characters tab returns:
@@ -2611,7 +2614,27 @@ function handlers.quit()
 	return { bye = true }
 end
 
-send({ id = 0, ok = true, ready = true, version = launch.versionNumber })
+-- Deathloom fork (Orbhoarder S6, 27 Nov 2026): tell the overlay what this copy can do, so it
+-- can hide or explain a feature instead of sending a command this PoB doesn't know.
+-- caps = every command name, plus "<cmd>.<feature>" for options a command gained later.
+-- Older copies send no caps: the overlay then assumes what the Nov 2026 pin could do.
+local CAP_FEATURES = {
+	"equipped.file", -- equipped from a character build file (#42)
+	"timeless.find", -- timeless seed search: find = "options" / "search"
+}
+local function capabilities()
+	local caps = { }
+	for name in pairs(handlers) do
+		table.insert(caps, name)
+	end
+	for _, feature in ipairs(CAP_FEATURES) do
+		table.insert(caps, feature)
+	end
+	table.sort(caps)
+	return caps
+end
+
+send({ id = 0, ok = true, ready = true, version = launch.versionNumber, fork = "deathloom", protocol = 1, caps = capabilities() })
 
 while true do
 	local line = io.read("*l")

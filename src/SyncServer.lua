@@ -630,7 +630,13 @@ function handlers.quit()
 	return { bye = true }
 end
 
-send({ id = 0, ok = true, ready = true, version = launch.versionNumber })
+-- Deathloom fork (Orbhoarder S6): command names this copy knows, as ImpactServer.lua sends them
+local caps = { }
+for name in pairs(handlers) do
+	table.insert(caps, name)
+end
+table.sort(caps)
+send({ id = 0, ok = true, ready = true, version = launch.versionNumber, fork = "deathloom", protocol = 1, caps = caps })
 
 while true do
 	local line = io.read("*l")
